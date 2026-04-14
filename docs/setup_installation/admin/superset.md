@@ -44,7 +44,7 @@ The users list displays:
 
 - **First name** and **Last name**: User identity information
 - **Username**: Unique identifier for each user
-- **Email**: Auto generated email
+- **Email**: Auto-generated email
 - **Is active?**: Whether the user account is enabled
 - **Roles**: Assigned roles determining permissions
 - **Groups**: Group memberships for organizational access control
@@ -77,7 +77,7 @@ Superset in Hopsworks includes several pre-configured roles:
 - **Gamma**: Read-only access to dashboards and charts
 - **sql_lab**: Access to SQL Lab for query execution
 - **Public**: Minimal read-only access for public dashboards
-- **Examples**: Role for example dashboards and datasets (Added only if superset loadExamples is set to true)
+- **Examples**: Role for example dashboards and datasets (added only if `superset.loadExamples` is set to `true`)
 - **Dataset**: Role for dataset management
 
 <figure>

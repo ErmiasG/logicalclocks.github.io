@@ -227,7 +227,7 @@ The permalink captures:
 !!! note "Permission Requirements"
     **For project members:** Users must be members of the same Hopsworks project to access the dashboard via permalink.
 
-    **For unauthenticated users:** To share permalinks with unauthenticated users outside your project, the dashboard must have the Public role assigned (see [Making Dashboards Public](#making-dashboards-public) above).
+    **For unauthenticated users:** To share permalinks with unauthenticated users outside your project, the dashboard must have the Public role assigned (see [Making Dashboards Public][making-dashboards-public] above).
     If the Public role option is not available, contact your Hopsworks administrator to enable it.
 
 ### Exporting Dashboards
@@ -253,7 +253,7 @@ SELECT
     feature1,
     feature2,
     COUNT(*) as count
-FROM delta.project1_featurestore.my_feature_group
+FROM delta.<project_name>_featurestore.my_feature_group
 GROUP BY feature1, feature2
 ORDER BY count DESC
 LIMIT 100
@@ -268,8 +268,8 @@ SELECT
     fg1.user_id,
     fg1.user_features,
     fg2.transaction_features
-FROM delta.project1_featurestore.user_features fg1
-JOIN delta.project1_featurestore.transaction_features fg2
+FROM delta.<project_name>_featurestore.user_features fg1
+JOIN delta.<project_name>_featurestore.transaction_features fg2
     ON fg1.user_id = fg2.user_id
 WHERE fg1.created_date >= CURRENT_DATE - INTERVAL '30' DAY
 LIMIT 100
@@ -334,7 +334,7 @@ Issue 1002 - The database returned an unexpected error.
 - This error occurs when querying tables without specifying the catalog name
 - Your feature store tables use a specific format (Delta, Iceberg, or Hudi) that requires an explicit catalog prefix
 - Solution: Specify the catalog name in your query (e.g., `delta.project1_featurestore.table_name`)
-- See [Using Different Table Formats](#adding-a-dataset) for detailed instructions on creating datasets with the correct catalog prefix
+- See [Using Different Table Formats][adding-a-dataset] for detailed instructions on creating datasets with the correct catalog prefix
 - If you're unsure which catalog to use, contact your Hopsworks administrator
 
 ## Best Practices
