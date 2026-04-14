@@ -106,7 +106,7 @@ Navigate to **Settings** → **Database connections** in the Superset interface 
 
 Hopsworks projects can have up to two database connections, created based on feature store configuration:
 
-**Online Feature Store Connection (MySQL)**
+#### Online Feature Store Connection (MySQL)
 
 - **Naming pattern**: `<project_name>__<username>_superset`
 - **Backend**: MySQL
@@ -114,7 +114,7 @@ Hopsworks projects can have up to two database connections, created based on fea
 - **Use cases**: Real-time dashboards, monitoring online features
 - **Created when**: An online feature store is created in the project
 
-**Offline Feature Store Connection (Trino)**
+#### Offline Feature Store Connection (Trino)
 
 - **Naming pattern**: `Trino__<project_name>__<username>_superset`
 - **Backend**: Trino
@@ -153,32 +153,32 @@ Navigate to **Cluster Settings** → **Configuration** and search for `superset`
 
 ### Available Variables
 
-**superset_admin_users**
+#### superset_admin_users
 
 - **Description**: Comma-separated list of Superset roles Hopsworks Admins should be assigned.
 - **Default**: `Admin`
 - **Format**: Comma-separated list of role names
 - Superset roles listed here are assigned to Hopsworks Admins.
 
-**superset_enabled**
+#### superset_enabled
 
 - **Description**: Enable or disable Superset cluster-wide
 - **Default**: `true`
 - **Values**: `true` or `false`
 - When set to `false`, Superset becomes unavailable for all projects across the cluster.
 
-**superset_user_roles**
+#### superset_user_roles
 
 - **Description**: Default roles automatically assigned to new Superset users
 - **Default**: `Gamma,sql_lab,Dataset,Examples`
 - **Format**: Comma-separated list of role names
 - These roles determine the initial permissions granted to users when they first access Superset from a project.
 
-**trino_default_catalog**
+#### trino_default_catalog
 
 - **Description**: Default catalog to use for the Offline Feature Store Connection
 - **Default**: `hive`
-- **Values**: `hive`, `delta`, `iceberg`, and `hudi`. 
+- **Values**: `hive`, `delta`, `iceberg`, and `hudi`.
 
 ### Applying Configuration Changes
 
@@ -194,4 +194,3 @@ After modifying any configuration variable:
 - **Role defaults**: Set `superset_user_roles` to provide appropriate baseline permissions
 - **Testing changes**: Test configuration changes in a development environment first
 - **Documentation**: Document any custom configuration changes and change them in your helm values.
-

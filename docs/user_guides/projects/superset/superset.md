@@ -111,9 +111,9 @@ They typically map to Feature Groups in your Hopsworks project.
 
 !!! note "Using Different Table Formats"
     If your feature store tables use a specific table format (Delta, Iceberg, or Hudi) and the Trino default catalog is not configured to match that format, you need to specify the catalog explicitly in your query.
-    
+
     Click **Create dataset from SQL query** and specify the catalog name matching your table format:
-    
+
     - For Delta format: `SELECT * FROM delta.<project_name>_featurestore.<table_name>`
     - For Iceberg format: `SELECT * FROM iceberg.<project_name>_featurestore.<table_name>`
     - For Hudi format: `SELECT * FROM hudi.<project_name>_featurestore.<table_name>`
@@ -226,7 +226,7 @@ The permalink captures:
 
 !!! note "Permission Requirements"
     **For project members:** Users must be members of the same Hopsworks project to access the dashboard via permalink.
-    
+
     **For unauthenticated users:** To share permalinks with unauthenticated users outside your project, the dashboard must have the Public role assigned (see [Making Dashboards Public](#making-dashboards-public) above).
     If the Public role option is not available, contact your Hopsworks administrator to enable it.
 
@@ -296,35 +296,41 @@ LIMIT 100
 ### Common Issues
 
 **Cannot see my Feature Groups:**
+
 - Verify you are connected to the correct database and schema
 - Ensure you have appropriate project permissions
 - Refresh the schema list if Feature Groups were recently created
 
 **Queries timing out:**
+
 - Reduce the amount of data being queried using filters
 - Add `LIMIT` clauses to restrict result set size
 - Break complex queries into smaller steps
 - Contact your administrator about timeout settings
 
 **Charts not loading:**
+
 - Check that the underlying dataset is still available
 - Verify you have permissions to access the data source
 - Refresh the page or clear browser cache
 - Check query filters for errors
 
 **Dashboard filters not working:**
+
 - Ensure filters are properly connected to charts
 - Verify filter types match the chart data types
 - Check for filter conflicts or invalid filter combinations
 
 **Trino table type error:**
-```
-trino error: TrinoExternalError(type=EXTERNAL, name=UNSUPPORTED_TABLE_TYPE, 
-message="Cannot query Delta Lake table 'project1_featurestore.transactions_1'", 
+
+```text
+trino error: TrinoExternalError(type=EXTERNAL, name=UNSUPPORTED_TABLE_TYPE,
+message="Cannot query Delta Lake table 'project1_featurestore.transactions_1'",
 query_id=20260414_155131_00049_qgyn2)
 This may be triggered by:
 Issue 1002 - The database returned an unexpected error.
 ```
+
 - This error occurs when querying tables without specifying the catalog name
 - Your feature store tables use a specific format (Delta, Iceberg, or Hudi) that requires an explicit catalog prefix
 - Solution: Specify the catalog name in your query (e.g., `delta.project1_featurestore.table_name`)
