@@ -110,7 +110,7 @@ Hopsworks projects can have up to two database connections, created based on Fea
 
 - **Naming pattern**: `<project_name>__<username>_superset`
 - **Backend**: MySQL
-- **Purpose**: Access to the Online Feature Store for 
+- **Purpose**: Access to the Online Feature Store for exploration
 - **Use cases**: Real-time dashboards, monitoring online features
 - **Created when**: An Online Feature Store is created in the project
 
