@@ -268,8 +268,9 @@ LIMIT 100
 
 - **Use selective filters**: Filter data as early as possible in queries
 - **Limit result sets**: Always use `LIMIT` to prevent excessive data transfers
-- **Leverage indexes**: Filter on indexed columns when possible
-- **Avoid SELECT ***: Select only the columns you need
+- **Use partition pruning**: Filter on partition columns when possible to reduce the amount of data scanned
+- **Avoid `SELECT *`**: Select only the columns you need
+- **Use statistics and compaction where applicable**: Keep table metadata and file layouts optimized for faster queries
 
 ### Chart Performance
 
