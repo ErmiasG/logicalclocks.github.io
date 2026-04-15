@@ -63,7 +63,7 @@ SQL Lab is an interactive SQL query interface for exploring your feature data.
 ### Opening SQL Lab
 
 1. Click **SQL Lab** in the top navigation
-2. Select your database from the **Database** dropdown.
+2. Select your database from the **Database** dropdown
 3. Select your project's Feature Store schema from the **Schema** dropdown
 
 <figure>
