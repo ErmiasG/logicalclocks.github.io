@@ -193,4 +193,4 @@ After modifying any configuration variable:
 - **Limited admin access**: Only grant `superset_admin_users` to trusted administrators
 - **Role defaults**: Set `superset_user_roles` to provide appropriate baseline permissions
 - **Testing changes**: Test configuration changes in a development environment first
-- **Documentation**: Document any custom configuration changes and change them in your helm values.
+- **Documentation**: Document any custom configuration changes and update your Helm values accordingly.
