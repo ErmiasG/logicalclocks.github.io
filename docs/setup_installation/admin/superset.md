@@ -60,8 +60,8 @@ The users list displays:
 Superset users are automatically synchronized with Hopsworks project members.
 When users are added to a project, their accounts are created automatically with appropriate permissions.
 
-Each project in Hopsworks creates a corresponding Superset user with the naming pattern `<project_name>__<username>_superset`.
-This ensures proper data isolation and access control between projects.
+For each Hopsworks user in a project, a corresponding Superset user is created with the naming pattern `<project_name>__<username>_superset`.
+This per-user-per-project mapping ensures proper data isolation and access control between projects.
 
 ## Managing Roles
 
@@ -85,9 +85,9 @@ Superset in Hopsworks includes several pre-configured roles:
   <figcaption>Superset role management</figcaption>
 </figure>
 
-### Project-Specific Roles
+### Project- and User-Specific Roles
 
-Each Hopsworks project has a dedicated Superset role with the naming pattern `HW_role_<project_name>__<username>_superset` that controls access to that project's data sources.
+Each Hopsworks project user has a dedicated Superset role with the naming pattern `HW_role_<project_name>__<username>_superset` that controls access to that project's data sources.
 These roles are automatically created and managed by Hopsworks to maintain proper access control and data isolation.
 
 ## Database Connections

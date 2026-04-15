@@ -321,7 +321,7 @@ Issue 1002 - The database returned an unexpected error.
 
 - This error occurs when querying tables without specifying the catalog name
 - Your Feature Store tables use a specific format (Delta, Iceberg, or Hudi) that requires an explicit catalog prefix
-- Solution: Specify the catalog name in your query (e.g., `delta.<project_name>_featurestore.table_name`)
+- Solution: Specify the catalog name in your query (e.g., `delta.<project_name>_featurestore.<table_name>`)
 - See [Using Different Table Formats][adding-a-dataset] for detailed instructions on creating datasets with the correct catalog prefix
 - If you're unsure which catalog to use, contact your Hopsworks administrator
 
