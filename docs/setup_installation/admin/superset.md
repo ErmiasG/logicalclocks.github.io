@@ -93,7 +93,7 @@ These roles are automatically created and managed by Hopsworks to maintain prope
 ## Database Connections
 
 Superset uses database connections to access data from the Hopsworks Feature Store.
-Database connections are created automatically based on project configuration and feature store setup.
+Database connections are created automatically based on project configuration and Feature Store setup.
 
 Navigate to **Settings** → **Database connections** in the Superset interface to view and manage database connections.
 
@@ -104,21 +104,21 @@ Navigate to **Settings** → **Database connections** in the Superset interface 
 
 ### Connection Types
 
-Hopsworks projects can have up to two database connections, created based on feature store configuration:
+Hopsworks projects can have up to two database connections, created based on Feature Store configuration:
 
 #### Online Feature Store Connection (MySQL)
 
 - **Naming pattern**: `<project_name>__<username>_superset`
 - **Backend**: MySQL
-- **Purpose**: Access to the online feature store for low-latency feature serving
+- **Purpose**: Access to the Online Feature Store for 
 - **Use cases**: Real-time dashboards, monitoring online features
-- **Created when**: An online feature store is created in the project
+- **Created when**: An Online Feature Store is created in the project
 
 #### Offline Feature Store Connection (Trino)
 
 - **Naming pattern**: `Trino__<project_name>__<username>_superset`
 - **Backend**: Trino
-- **Purpose**: Access to the offline feature store for analytical queries
+- **Purpose**: Access to the Offline Feature Store for analytical queries
 - **Use cases**: Historical analysis, training data exploration, complex aggregations
 - **Created when**: Trino is enabled for the project
 

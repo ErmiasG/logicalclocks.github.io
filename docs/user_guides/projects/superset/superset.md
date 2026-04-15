@@ -62,9 +62,9 @@ SQL Lab is an interactive SQL query interface for exploring your feature data.
 
 ### Opening SQL Lab
 
-1. Click **SQL** → **SQL Lab** in the top navigation
-2. Select your database from the **Database** dropdown (typically `trino`)
-3. Select your project's feature store schema from the **Schema** dropdown
+1. Click **SQL Lab** in the top navigation
+2. Select your database from the **Database** dropdown.
+3. Select your project's Feature Store schema from the **Schema** dropdown
 
 <figure>
   <img src="../../../../assets/images/guides/superset/sql-lab.png" alt="SQL Lab interface" />
@@ -79,14 +79,6 @@ To execute a query:
 2. Click **Run** or press `Ctrl+Enter` (Windows/Linux) or `Cmd+Enter` (Mac)
 3. View results in the **Results** tab below the editor
 4. Check the **Query History** tab to see previous queries
-
-### Query Features
-
-- **Auto-complete**: SQL Lab provides auto-complete for table and column names
-- **Query history**: All executed queries are saved and can be reviewed
-- **Save queries**: Save frequently used queries for future use
-- **Export results**: Download query results as CSV or other formats
-- **Visualize results**: Create charts directly from query results
 
 ### Best Practices for SQL Lab
 
@@ -104,13 +96,13 @@ They typically map to Feature Groups in your Hopsworks project.
 
 1. Navigate to **Datasets**
 2. Click **+ Dataset** in the top right
-3. Select your database (e.g., `Trino__project1__meb10000_superset`)
-4. Select your schema (your project's feature store schema)
+3. Select your database (e.g., `Trino__<project_name>__<username>_superset`)
+4. Select your schema (your project's Feature Store schema)
 5. Select the table (your Feature Group or Feature View)
 6. Click **Create Dataset and Create Chart**
 
 !!! note "Using Different Table Formats"
-    If your feature store tables use a specific table format (Delta, Iceberg, or Hudi) and the Trino default catalog is not configured to match that format, you need to specify the catalog explicitly in your query.
+    If your Feature Store tables use a specific table format (Delta, Iceberg, or Hudi) and the Trino default catalog is not configured to match that format, you need to specify the catalog explicitly in your query.
 
     Click **Create dataset from SQL query** and specify the catalog name matching your table format:
 
@@ -119,15 +111,6 @@ They typically map to Feature Groups in your Hopsworks project.
     - For Hudi format: `SELECT * FROM hudi.<project_name>_featurestore.<table_name>`
     
     If you're unsure which format your tables use or what the default catalog is set to, contact your Hopsworks administrator.
-
-### Configuring Datasets
-
-After creating a dataset, you can configure:
-
-- **Columns**: Define data types and column-specific settings
-- **Metrics**: Create calculated metrics for aggregations
-- **Calculated columns**: Define computed columns using SQL expressions
-- **Filters**: Set default filters for the dataset
 
 ## Creating Charts
 
@@ -173,20 +156,24 @@ Dashboards combine multiple charts into interactive visualization reports.
 
 ### Sharing Dashboards
 
-Share dashboards with other project members:
+By default, dashboards are only accessible to the owner of the dashboard.
+To share a dashboard with other users, you need to explicitly grant access by adding them as owners or granting role-based access.
 
-- Dashboards are automatically visible to all members of your Hopsworks project
-- Users with appropriate permissions can view and interact with dashboards
-- Data Owner and Data Scientist roles can edit dashboards
+#### Adding Users to Share a Dashboard
 
-### Setting Permissions
+To share a dashboard with specific users or roles:
 
-Dashboard permissions are controlled through your Hopsworks project membership.
-Only users who are members of the project can access project-specific data and dashboards.
+1. Navigate to **Dashboards** and locate your dashboard
+2. Click the **edit icon** menu next to the dashboard name
+3. In the **Access** section, you can grant access in two ways:
+   - **Owners**: Add individual users to the owners list to grant them full access
+   - **Roles**: Add a role that users are members of to grant access to all users with that role
+
+Users added as owners or through roles can view and interact with the dashboard.
 
 #### Making Dashboards Public
 
-You can make a dashboard accessible to all Superset users by adding the Public role to the dashboard:
+To allow access to anonymous or unauthenticated users, add the Public role to the dashboard's Roles list:
 
 1. Navigate to **Dashboards** and locate your dashboard
 2. Click the **edit icon** menu next to the dashboard name
@@ -196,10 +183,10 @@ You can make a dashboard accessible to all Superset users by adding the Public r
 
 <figure>
   <img src="../../../../assets/images/guides/superset/add-public-role.png" alt="Adding public role to dashboard" />
-  <figcaption>Adding the Public role to make a dashboard accessible to all users</figcaption>
+  <figcaption>Adding the Public role to make a dashboard accessible to unauthenticated users</figcaption>
 </figure>
 
-When the Public role is added, the dashboard becomes viewable by anyone with access to Superset.
+When the Public role is added, the dashboard becomes viewable by anyone, including unauthenticated users.
 
 !!! warning "Security Considerations"
     Only add the Public role to dashboards containing non-sensitive data.
@@ -225,9 +212,9 @@ The permalink captures:
 - Dashboard layout and zoom level
 
 !!! note "Permission Requirements"
-    **For project members:** Users must be members of the same Hopsworks project to access the dashboard via permalink.
+    **For project members:** Users must have access to the dashboard (either as owners or through roles) to view it via permalink.
 
-    **For unauthenticated users:** To share permalinks with unauthenticated users outside your project, the dashboard must have the Public role assigned (see [Making Dashboards Public][making-dashboards-public] above).
+    **For unauthenticated users:** To share permalinks with anonymous or unauthenticated users, the dashboard must have the Public role assigned (see [Making Dashboards Public][making-dashboards-public] above).
     If the Public role option is not available, contact your Hopsworks administrator to enable it.
 
 ### Exporting Dashboards
@@ -325,15 +312,15 @@ LIMIT 100
 
 ```text
 trino error: TrinoExternalError(type=EXTERNAL, name=UNSUPPORTED_TABLE_TYPE,
-message="Cannot query Delta Lake table 'project1_featurestore.transactions_1'",
+message="Cannot query Delta Lake table '<project_name>_featurestore.<table_name>'",
 query_id=20260414_155131_00049_qgyn2)
 This may be triggered by:
 Issue 1002 - The database returned an unexpected error.
 ```
 
 - This error occurs when querying tables without specifying the catalog name
-- Your feature store tables use a specific format (Delta, Iceberg, or Hudi) that requires an explicit catalog prefix
-- Solution: Specify the catalog name in your query (e.g., `delta.project1_featurestore.table_name`)
+- Your Feature Store tables use a specific format (Delta, Iceberg, or Hudi) that requires an explicit catalog prefix
+- Solution: Specify the catalog name in your query (e.g., `delta.<project_name>_featurestore.table_name`)
 - See [Using Different Table Formats][adding-a-dataset] for detailed instructions on creating datasets with the correct catalog prefix
 - If you're unsure which catalog to use, contact your Hopsworks administrator
 
