@@ -235,7 +235,7 @@ Independent [feature, training and inference pipelines](concepts/fti.md), connec
 
 | Task | Start here |
 | --- | --- |
-| :material-rocket-launch-outline: Deploy | [AWS](setup_installation/aws/getting_started.md), [Azure](setup_installation/azure/getting_started.md), [GCP](setup_installation/gcp/getting_started.md), [on-prem](setup_installation/on_prem/contact_hopsworks.md), [Helm values](setup_installation/common/helm_chart_values.md) |
+| :material-rocket-launch-outline: Deploy | [AWS](setup_installation/aws/getting_started.md), [Azure](setup_installation/azure/getting_started.md), [GCP](setup_installation/gcp/getting_started.md), [on-prem](setup_installation/on_prem/contact_hopsworks.md), [Helm values][helm-chart-values-reference] |
 | :material-monitor-dashboard: Operate | [Administration](setup_installation/admin/index.md), [monitoring](setup_installation/admin/monitoring/grafana.md), [alerts](setup_installation/admin/alert.md), [HA and DR](setup_installation/admin/ha-dr/intro.md), [service operations](setup_installation/admin/operationLogs.md) |
 | :material-wrench-outline: Troubleshoot | [Model serving](user_guides/mlops/serving/troubleshooting.md), [Python deployments](user_guides/projects/python-deployment/troubleshooting.md), [online ingestion](user_guides/fs/feature_group/online_ingestion_observability.md), [Jupyter session capacity](user_guides/projects/jupyter/session_capacity_warnings.md) |
 | :material-arrow-up-circle-outline: Upgrade | [3.x to 4.0 migration](user_guides/migration/40_migration.md), [Airflow 3 upgrade](user_guides/projects/airflow/airflow3_upgrade.md), [Airflow 3 operator notes](setup_installation/admin/airflow3.md) |
@@ -256,7 +256,7 @@ Independent [feature, training and inference pipelines](concepts/fti.md), connec
 :material-tune:{ .hops-colophon-ico } Configure and query
 { .hops-colophon-cap }
 
-- [Helm chart values](setup_installation/common/helm_chart_values.md)
+- [Helm chart values][helm-chart-values-reference]
 - [Cluster configuration](setup_installation/admin/variables.md)
 - [Query engine (Trino)](user_guides/projects/trino/query_engine.md)
 - [Vector similarity search](user_guides/fs/vector_similarity_search.md)
@@ -6242,13 +6242,23 @@ Users can schedule periodic statistics computation that take into consideration 
 By default, the `compute_statistics` method computes statistics on the most recent version of the data available in a feature group.
 Users can provide a specific time using the `wallclock_time` parameter, to compute the statistics for a previous version of the data.
 
-Hopsworks can compute statistics of external feature groups.
-As external feature groups are read only from an Hopsworks perspective, statistics computation can be triggered using the `compute_statistics` method.
-
 === "Python"
 
     ```python
     fg.compute_statistics(wallclock_time="20220611 20:00")
+    ```
+
+### External feature groups
+
+External feature groups own the same built-in `ingestion_stats` configuration as cached and stream feature groups, but no data is ingested into Hopsworks for them, so it never runs on its own.
+Calling `compute_statistics` on the external feature group, or clicking "Compute statistics" in the UI, runs it: the statistics job reads the external source and profiles it like an internal feature group.
+Saving an external feature group with statistics enabled runs it once as well.
+External feature groups have no commit history, so their statistics carry the computation time only and `compute_statistics` takes no time argument.
+
+=== "Python"
+
+    ```python
+    external_fg.compute_statistics()
     ```
 
 ## Inspect statistics
@@ -7129,6 +7139,35 @@ Additionally, you can specify the percentage of feature data on which statistics
     ```
 
 See the API reference for [`FeatureMonitoringConfig.with_detection_window`][hsfs.core.feature_monitoring_config.FeatureMonitoringConfig.with_detection_window].
+
+#### Time basis of the windows
+
+Rolling windows select rows by an event-time feature when the Feature Group declares one, and by commit time otherwise.
+The `event_time` parameter of `create_scheduled_statistics` and `create_feature_monitoring` overrides that default for the whole configuration, detection and reference windows alike.
+Pass a feature name to use another timestamp, date or epoch feature of the Feature Group, or `False` to select rows by commit time.
+
+=== "Python"
+
+    ```python
+    # windows over the transaction time, the Feature Group event_time (default)
+    fg_monitoring_config = trans_fg.create_feature_monitoring(
+        name="trans_fg_amount_monitoring",
+    )
+
+    # windows over another time feature of the Feature Group
+    fg_monitoring_config = trans_fg.create_feature_monitoring(
+        name="trans_fg_amount_monitoring_by_settlement",
+        event_time="settlement_date",
+    )
+
+    # windows over the time the rows were written (commit time)
+    fg_monitoring_config = trans_fg.create_feature_monitoring(
+        name="trans_fg_amount_monitoring_by_commit",
+        event_time=False,
+    )
+    ```
+
+See [Time basis](../feature_monitoring/scheduled_statistics.md#time-basis) for how the two bases differ.
 
 ### Step 4: (Optional) Define a reference window
 
@@ -10797,6 +10836,32 @@ Additionally, you can specify the percentage of feature data on which statistics
 
 See the API reference for [`FeatureMonitoringConfig.with_detection_window`][hsfs.core.feature_monitoring_config.FeatureMonitoringConfig.with_detection_window].
 
+#### Time basis of the windows
+
+Rolling windows select rows by the event-time feature of the Feature View's left Feature Group when it declares one, and by commit time otherwise.
+The `event_time` parameter of `create_scheduled_statistics` and `create_feature_monitoring` overrides that default for the whole configuration, detection and reference windows alike.
+Pass the name, prefix included, of a timestamp, date or epoch feature that the Feature View selects, or `False` to select rows by commit time.
+The left Feature Group's event-time feature is also accepted when the Feature View does not select it.
+With event time the joined Feature Groups contribute their current rows, whereas with commit time the same commit interval is applied to every Feature Group in the query.
+
+=== "Python"
+
+    ```python
+    # windows over a time feature of a joined Feature Group
+    fm_monitoring_config = trans_fv.create_feature_monitoring(
+        name="trans_fv_amount_monitoring_by_event_time",
+        event_time="datetime",
+    )
+
+    # windows over the time the rows were written (commit time)
+    fm_monitoring_config = trans_fv.create_feature_monitoring(
+        name="trans_fv_amount_monitoring_by_commit",
+        event_time=False,
+    )
+    ```
+
+See [Time basis](../feature_monitoring/scheduled_statistics.md#time-basis) for how the two bases differ.
+
 ### Step 6: (Optional) Define a reference window
 
 When setting up feature monitoring for a Feature View, the reference can be either a reference window of feature data or a training dataset.
@@ -10925,6 +10990,7 @@ A Feature View can also monitor the inference data of a model served in producti
 This is the feature-view entry point to [Model Monitoring](../../mlops/model_monitoring/index.md).
 
 It targets the feature view's logging feature group, so feature logging must be enabled with `feature_view.enable_logging()`, and filters the detection window by the given model name and version.
+The windows select inference rows by their `log_time`, the time the prediction was logged.
 The reference defaults to the training dataset version used to train the model.
 
 === "Python"
@@ -14764,6 +14830,32 @@ Taking a Feature Group as an example, the figure above describes how these windo
 - A _rolling window_ covering a variable subset of feature data (e.g., feature data written last week).
   It helps you analyze the properties of **newly inserted feature data**.
 
+### Time basis
+
+A rolling window needs a **notion of time** to decide which rows fall inside it.
+Hopsworks supports two bases, chosen once per configuration and **shared by the detection and reference windows**:
+
+- _Event time_: rows are selected by the value of an event-time feature, so a window such as "last week" contains the rows whose event time falls in that week regardless of when they were written.
+  This is the default for Feature Groups and Feature Views that declare an `event_time`.
+- _Commit time_: rows are selected by the time they were written to the Feature Group, using time travel.
+  A window such as "last week" contains the rows committed during that week.
+  This is the default when no event-time feature is declared, and it requires a time-travel enabled Feature Group.
+
+A rolling event-time window is anchored on the time the schedule fires.
+Each run selects the rows whose event time is inside the window at that moment and stores their statistics.
+
+A row that lands after the run covering its event time is not added to that run's statistics, and every later window starts after its event time, so no window counts it. This happens with backfills and with the materialization lag of streaming pipelines. For backfill-heavy pipelines, use an expanding window, which has no lower bound, or the commit-time basis, which selects rows by when they were written.
+
+!!! tip "Leave room for late rows"
+    `time_offset` sets where the window starts, counted back from the run, and `window_length` sets how long it lasts, so a `time_offset` longer than the `window_length` ends the window before the run.
+    For example, a daily schedule with `time_offset="25h"` and `window_length="24h"` that runs at 12:00 on Tuesday covers event times from 11:00 on Monday to 11:00 on Tuesday, and the next run covers 11:00 on Tuesday to 11:00 on Wednesday.
+    Consecutive windows meet, and each row has one hour to land before the window that covers it runs.
+    Size the gap to the longest delay with which rows land, such as the materialization interval of the pipeline.
+
+!!! note "Updated rows"
+    An event-time window reads the current snapshot of the data and filters it on the event-time feature, so it sees only the latest version of each row.
+    A commit-time window reads the commits in its range, so each version of an updated row is counted in the window of the commit that wrote it.
+
 See more details on how to define a detection window for your Feature Groups and Feature Views in the Feature Monitoring Guides for [Feature Groups](../feature_group/feature_monitoring.md) and [Feature Views](../feature_view/feature_monitoring.md).
 
 !!! info "Next steps"
@@ -14816,6 +14908,9 @@ Taking a Feature View as an example, the figure above describes how these window
   It helps you compare **newly inserted feature data** into your Feature Groups **against a Training Dataset version**.
 - A _specific value_.
   It helps you target the analysis of feature data to a **specific feature and statistics metric**.
+
+Rolling and expanding reference windows use the same time basis as the detection window of the configuration, either the event-time feature or the commit time.
+See [Time basis](scheduled_statistics.md#time-basis) in the scheduled statistics guide.
 
 See more details on how to define a reference window for your Feature Groups and Training Datasets in the Feature Monitoring guides for [Feature Groups](../feature_group/feature_monitoring.md) and [Feature Views](../feature_view/feature_monitoring.md).
 
@@ -21122,7 +21217,7 @@ Add `--git-auto-redeploy` to roll a Git-backed app onto every new commit.
 # Deployment Creation
 Source: https://docs.hopsworks.ai/latest/user_guides/projects/python-deployment/python-deployment/
 
-# Python Deployment
+# Python Deployment { #python-deployment }
 
 ## Introduction
 
@@ -21145,6 +21240,8 @@ In each Python deployment, you can configure the following:
     2. [Resources](#resources)
     3. [Autoscaling](#autoscaling)
     4. [Scheduling](#scheduling)
+
+Like model deployments, Python deployments keep a numbered history of their configuration, so a change to the script, environment, resources or scaling can be saved as a new version and rolled back, see [Versions](#versions).
 
 ## Web UI
 
@@ -21356,6 +21453,17 @@ If the cluster has Kueue enabled, you can select a queue for your deployment fro
 Queues control resource allocation and scheduling priority across the cluster.
 
 For full details on scheduling configuration, see the [Scheduling Guide](../../mlops/serving/scheduling.md).
+
+## Versions
+
+A Python deployment keeps its configuration in numbered versions, the same way a model deployment does.
+In the edit form, `Save` edits the active version in place and `Save as new version` stores the changes as a new version and activates it.
+The `Versions` card on the overview page lists the versions, shows the configuration of each one, and rolls back to an earlier one.
+
+!!! info "Not covered by versions"
+    Scheduling and Knative mode are not part of a version, so a rollback keeps their current values.
+    A script read from a HopsFS path or a git repository is stored in the version as that path or repository, so a rollback does not bring back earlier code, and the deployment restarts on every save to pick up the current one.
+    For full details, see the [Deployment Versions Guide][deployment-versions].
 
 ================================================================================
 # REST API
@@ -23531,6 +23639,11 @@ Refer to the [Deployment Creation Guide](deployment.md) for step-by-step instruc
 !!! tip "Python deployments"
     If you want to deploy a Python script without a model artifact, see the [Python Deployments](../../projects/python-deployment/python-deployment.md) page.
 
+### Versioning
+
+A deployment keeps a numbered history of its configuration.
+Save changes in place or as a new version, inspect earlier versions and roll back to one, for model deployments and Python deployments alike, see the [Deployment Versions Guide][deployment-versions].
+
 ### Deployment Schema and default predictor
 
 Describe the prediction request a deployment accepts, validate requests against it, and serve a model without writing a predictor script, see the [Deployment Schema Guide][deployment-schema].
@@ -23834,7 +23947,8 @@ Predictor and transformer scripts run on separate components and, therefore, sca
 Additionally, artifact files can also contain a **server configuration file** that helps detach configuration used within the model deployment from the model server or the implementation of the predictor and transformer scripts.
 Inside a model deployment, the local path to the configuration file is stored in the `CONFIG_FILE_PATH` environment variable (see [environment variables](../serving/predictor.md#environment-variables)).
 
-Each deployment tracks its artifact files through a ==deployment version==, an integer (1, 2, 3...) that is incremented whenever the artifact content changes (e.g., updating a predictor script or configuration file).
+Each deployment keeps its configuration, including its artifact files, in numbered ==deployment versions==.
+A save edits the active version in place unless you save it as a new version, and earlier versions can be reactivated with a rollback, see the [Deployment Versions Guide][deployment-versions].
 
 Inside a model deployment, the local path to the artifact files is stored in the `ARTIFACT_FILES_PATH` environment variable (see [environment variables](../serving/predictor.md#environment-variables)).
 
@@ -24039,6 +24153,173 @@ Condition transitions while a deployment starts:
 Condition transitions while a deployment stops:
 
 --8<-- "user_guides/mlops/serving/deployment-state/conditions-stopping.html"
+
+================================================================================
+# Deployment Versions
+Source: https://docs.hopsworks.ai/latest/user_guides/mlops/serving/deployment-versions/
+
+# How To Manage Deployment Versions { #deployment-versions }
+
+## Introduction
+
+In this guide, you will learn how a deployment keeps a numbered history of its configuration, and how to save, inspect and roll back versions.
+
+Every deployment has one or more versions.
+A new deployment starts at version 1, and exactly ==one version is active at a time==, the one the deployment runs.
+This applies to model deployments and to [Python deployments][python-deployment], which run a script without a model.
+
+When you save changes to a deployment, you choose how they are stored:
+
+- **Save** edits the active version in place, and it keeps its number.
+- **Save as new version** stores the configuration as a new version, numbered one above the highest the deployment ever had, and makes it active.
+
+The previous versions are kept with their files, so a **rollback** reactivates an earlier version without copying anything.
+Running instances restart only when the active configuration changes, so a save without changes neither restarts the deployment nor creates a version.
+Two cases count as a change even when the form is unchanged: a script read from outside the version, from a HopsFS path or a git repository, and a Python environment whose libraries changed since the deployment started.
+
+!!! tip "Restarting a deployment"
+    To restart a deployment without saving, you can stop and start it.
+
+Saving in place keeps the version number, so the `DEPLOYMENT_VERSION` environment variable and the `deployment_version` column of logged features stay the same across the change.
+Use **Save as new version** when you need to tell the predictions of the old and new configuration apart.
+
+## What a version holds
+
+A version holds the configuration of the predictor and the transformer:
+
+| Configuration | Details |
+| ------------- | ------- |
+| **Model** | The model and model version, for model deployments. |
+| **Artifact files** | The predictor and transformer scripts, and the server configuration file, as described in [Artifact files of a version](#artifact-files-of-a-version). |
+| **vLLM** | The vLLM settings for LLM deployments. |
+| **Python environments** | The environments the predictor and the transformer run in. |
+| **Resources and scaling** | Resources, scaling configuration and environment variables. |
+| **Source and observability** | The git source, tracing and feature logging configuration. |
+
+The **API protocol**, **request batching**, **inference logging**, **scheduling configuration** and **Knative mode** belong to the deployment rather than to a version.
+They are edited in place whichever way you save, and a rollback does not restore them, because they apply to the endpoint and the infrastructure it runs on rather than to what it serves.
+
+!!! info "Versions edited in place"
+    A version that was edited in place with `Save` after it was created comes back as edited, when you roll back to it.
+    Use `Save as new version` when you want to be able to return to the current configuration.
+
+## Web UI
+
+### Step 1: Save a new version
+
+Open the deployment and go to its edit page.
+After making your changes, open the menu next to the `Save` button at the bottom of the form and click on `Save as new version`.
+Clicking on `Save` instead edits the active version in place.
+
+<p align="center">
+  <figure>
+    <img src="../../../../assets/images/guides/mlops/serving/deployment_edit_save_as_new_version.png" alt="Save as new version option in the Save menu">
+    <figcaption>Save as new version option in the Save menu</figcaption>
+  </figure>
+</p>
+
+### Step 2: Inspect the versions
+
+The `Versions` card on the deployment overview page lists every time a version became the active one, with when, by whom and why: creation, new version or rollback.
+The version the deployment runs is marked as `active`.
+
+Click on `Details` next to a version to see its configuration, including its model, scripts, Python environments, scaling and resources.
+The scripts can be downloaded from there, and the model and the Python environments link to their pages.
+
+<p align="center">
+  <figure>
+    <img src="../../../../assets/images/guides/mlops/serving/deployment_versions_detail.png" alt="Details button in the Versions card">
+    <figcaption>Details button in the Versions card</figcaption>
+  </figure>
+</p>
+
+### Step 3: Roll back
+
+Click on `Roll back` next to an earlier version and confirm.
+A running deployment restarts with the configuration of that version.
+Rolling back requires the Data owner role in the project, and is disabled while the deployment is starting or stopping.
+It stays available while a new version is updating, so a version that fails to come up can be rolled back right away.
+The rollback then starts a new rollout with the configuration of the earlier version, and the instances that were serving keep serving until it is ready.
+An edit saved in place cannot be undone with a rollback, because it changed the active version itself: stop the deployment or wait for it to fail, then save the previous configuration again.
+
+<p align="center">
+  <figure>
+    <img src="../../../../assets/images/guides/mlops/serving/deployment_versions_rollback.png" alt="Roll back button in the Versions card">
+    <figcaption>Roll back button in the Versions card</figcaption>
+  </figure>
+</p>
+
+## Code
+
+### Step 1: Connect to Hopsworks
+
+=== "Python"
+
+    ```python
+    import hopsworks
+
+
+    project = hopsworks.login()
+
+    # get Hopsworks Model Serving handle
+    ms = project.get_model_serving()
+
+    my_deployment = ms.get_deployment("mydeployment")
+    ```
+
+### Step 2: Save a new version
+
+Change the configuration and call `.save()` with `new_version=True`.
+Without it, the active version is edited in place.
+
+=== "Python"
+
+    ```python
+    my_deployment.predictor.scaling_configuration.min_instances = 2
+    my_deployment.predictor.scaling_configuration.max_instances = 2
+    my_deployment.save(new_version=True)
+
+    print(my_deployment.version)  # number of the active version
+    ```
+
+### Step 3: List the versions
+
+=== "Python"
+
+    ```python
+    for version in my_deployment.get_versions():  # newest first
+        print(version.version, version.active, version.created, version.created_by)
+    ```
+
+### Step 4: Roll back
+
+=== "Python"
+
+    ```python
+    my_deployment.rollback(1)
+    ```
+
+!!! api "API reference"
+
+    - <code class="doc-symbol doc-symbol-method"></code> [`ModelServing.get_deployment`][hsml.model_serving.ModelServing.get_deployment]
+    - <code class="doc-symbol doc-symbol-class"></code> [`Deployment`][hsml.deployment.Deployment]
+        - <code class="doc-symbol doc-symbol-method"></code> [`save`][hsml.deployment.Deployment.save]
+        - <code class="doc-symbol doc-symbol-method"></code> [`get_versions`][hsml.deployment.Deployment.get_versions]
+        - <code class="doc-symbol doc-symbol-method"></code> [`rollback`][hsml.deployment.Deployment.rollback]
+    - <code class="doc-symbol doc-symbol-class"></code> [`DeploymentVersion`][hsml.deployment_version.DeploymentVersion]
+
+    <a class="hops-api-cta" href="../../../../python-api/hopsworks/">Browse the full Python API :material-arrow-right:</a>
+
+## Artifact files of a version
+
+The artifact files of each version, such as the predictor and transformer scripts and the server configuration file, are stored under `/Deployments/<deployment-name>/<version>/`.
+A script read from a HopsFS path or a git repository is stored in the version as that path or repository, not copied, so a rollback restores the configuration but not the code.
+
+Inside a deployment, the active version number is available in the `DEPLOYMENT_VERSION` environment variable, and the local path to its artifact files in `ARTIFACT_FILES_PATH`.
+
+!!! warning
+    All files under `/Models` and `/Deployments` are managed by Hopsworks.
+    Manual changes to these files cannot be reverted and can have an impact on existing model deployments.
 
 ================================================================================
 # Deployment Schema
@@ -34524,24 +34805,395 @@ After modifying any configuration variable:
 - **Documentation**: Document any custom configuration changes and update your Helm values accordingly.
 
 ================================================================================
-# Helm Chart Values Reference
+# Helm chart values reference
 Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/
 
 # Helm chart values reference
 
-This page lists every value you can configure when deploying Hopsworks with the Hopsworks Helm chart.
-It is generated from the chart's `README.md`.
+This section lists every value you can configure when deploying Hopsworks with the Hopsworks Helm chart, with one page per top-level key.
+It is generated from the `README.md` files of the chart and its subcharts, and for RonDB from the `values.schema.json` of the RonDB chart that Hopsworks pins.
 On a released version of the docs it matches the Hopsworks Helm chart for that release; on the development docs it reflects the latest chart published to the development channel.
 
 You set these values in the `values.<cloud>.yaml` file that you pass to `helm install`.
 For a guided, end-to-end setup, follow one of the cloud installation guides, such as the [AWS getting started guide][aws-getting-started-with-eks].
-Only a small subset of these values is needed for a typical install; the table below is the exhaustive reference.
+Only a small subset of these values is needed for a typical install: "Common values" below lists the ones the cloud installation guides set, and the pages are the exhaustive reference.
 
-## Configuration values
+"All values" lists the pages.
+Each page states when its subchart is deployed: when the condition names several values, Helm uses the first one that is set.
+"Upstream charts" are the charts a subchart installs from other Helm repositories, and each link opens a chart's documentation for the version Hopsworks pins.
+A page lists only the values Hopsworks sets for its upstream charts, except the RonDB page, which lists all of the RonDB chart's values.
+A default is the value Hopsworks deploys: the root chart's settings for a subchart are applied over the subchart's own defaults.
+Every value has its own link (the `#` next to its key), and each section has its defaults as a values file under "Defaults as YAML".
 
 <!-- BEGIN GENERATED VALUES -->
+
+_The values tables are generated from the Hopsworks Helm chart during the documentation build._
+_To preview them locally, run `uv run --extra cli hopsworks-docs gen-helm-values --chart <path-to-hopsworks-helm>`, and `uv run hopsworks-docs reset-helm-values` before committing._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# global
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/global/
+
+# Global values { #helm-values-global }
+
+Values under `global` are shared by every subchart: image registry and pull secrets, storage class, scheduling, cloud provider and which optional services are enabled.
+
+<!-- BEGIN GENERATED VALUES -->
+
 _The values table is generated from the Hopsworks Helm chart during the documentation build._
-_To preview it locally, run `uv run --extra cli hopsworks-docs gen-helm-values --chart <path-to-hopsworks-helm>`._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# airflow
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/airflow/
+
+# Airflow values { #helm-values-airflow }
+
+Values under `airflow` configure Apache Airflow, which schedules and orchestrates Hopsworks jobs.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# arrowflight
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/arrowflight/
+
+# Arrow Flight values { #helm-values-arrowflight }
+
+Values under `arrowflight` configure the Arrow Flight server, which serves fast reads of feature groups and training datasets.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# certs-operator
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/certs-operator/
+
+# Certs operator values { #helm-values-certs-operator }
+
+Values under `certs-operator` configure the operator that issues the TLS certificates of the Hopsworks services and removes them on uninstall.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# consul
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/consul/
+
+# Consul values { #helm-values-consul }
+
+Values under `consul` configure Consul, which provides service discovery and DNS between the Hopsworks services.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# docker-registry
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/docker-registry/
+
+# Docker registry values { #helm-values-docker-registry }
+
+Values under `docker-registry` configure the in-cluster Docker registry that stores the images Hopsworks builds, such as project Python environments.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# grafana
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/grafana/
+
+# Grafana values { #helm-values-grafana }
+
+Values under `grafana` configure Grafana and the Hopsworks monitoring dashboards.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# hive
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hive/
+
+# Hive values { #helm-values-hive }
+
+Values under `hive` configure the Hive metastore, which holds the table metadata of the offline feature store.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# hopsfs
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hopsfs/
+
+# HopsFS values { #helm-values-hopsfs }
+
+Values under `hopsfs` configure HopsFS, the distributed file system behind datasets and the offline feature store.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# hopsfs-csi
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hopsfs-csi/
+
+# HopsFS CSI driver values { #helm-values-hopsfs-csi }
+
+Values under `hopsfs-csi` configure the CSI driver that mounts HopsFS into pods.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# hopsworks
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hopsworks/
+
+# Hopsworks values { #helm-values-hopsworks }
+
+Values under `hopsworks` configure the Hopsworks backend: the Payara worker and admin deployments, ingress, the certificate authority, database migrations and backups.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# hw-kueue
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hw-kueue/
+
+# Kueue values { #helm-values-hw-kueue }
+
+Values under `hw-kueue` configure Kueue, the job queueing controller, and the queues Hopsworks schedules jobs with.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# hw-kyverno
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hw-kyverno/
+
+# Kyverno values { #helm-values-hw-kyverno }
+
+Values under `hw-kyverno` configure the Kyverno cluster policies and the policy exceptions Hopsworks workloads need.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# judge
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/judge/
+
+# Judge values { #helm-values-judge }
+
+Values under `judge` configure Judge, the active cluster arbitrator service.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# kafka
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/kafka/
+
+# Kafka values { #helm-values-kafka }
+
+Values under `kafka` configure Kafka, run by the Strimzi operator, which carries feature data on its way to the online feature store.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# kserve
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/kserve/
+
+# KServe values { #helm-values-kserve }
+
+Values under `kserve` configure KServe and Knative Serving, which run model deployments.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# minio
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/minio/
+
+# MinIO values { #helm-values-minio }
+
+Values under `minio` configure MinIO, an S3-compatible object store deployed inside the cluster.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# olk
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/olk/
+
+# OpenSearch values { #helm-values-olk }
+
+Values under `olk` configure OpenSearch, OpenSearch Dashboards, Logstash and Filebeat, which provide search, the vector index and service logs.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# onlinefs
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/onlinefs/
+
+# OnlineFS values { #helm-values-onlinefs }
+
+Values under `onlinefs` configure OnlineFS, which consumes feature rows from Kafka and writes them to RonDB.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# prometheus
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/prometheus/
+
+# Prometheus values { #helm-values-prometheus }
+
+Values under `prometheus` configure Prometheus, which collects cluster and service metrics, and the Prometheus adapter, which exposes them to autoscalers.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# ray
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/ray/
+
+# Ray values { #helm-values-ray }
+
+Values under `ray` configure the KubeRay operator, which runs the Ray clusters behind Ray jobs and notebooks.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# rondb
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/rondb/
+
+# RonDB values { #helm-values-rondb }
+
+Values under `rondb` configure RonDB, the online feature store database, installed from the RonDB Helm chart.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# spark
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/spark/
+
+# Spark values { #helm-values-spark }
+
+Values under `spark` configure the Spark operator, the Spark history server and the remote shuffle service.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# superset
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/superset/
+
+# Superset values { #helm-values-superset }
+
+Values under `superset` configure Apache Superset, the BI dashboards over feature store data.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# trino
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/trino/
+
+# Trino values { #helm-values-trino }
+
+Values under `trino` configure Trino, the SQL query engine, and its test coordinator for user catalogs.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
+# vpa
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/vpa/
+
+# Vertical Pod Autoscaler values { #helm-values-vpa }
+
+Values under `vpa` configure the Vertical Pod Autoscaler: its admission controller, recommender and updater.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
 <!-- END GENERATED VALUES -->
 
 ================================================================================
@@ -36715,6 +37367,22 @@ Source: https://docs.hopsworks.ai/latest/python-api/hsml/deployment_tracing_conf
       show_root_heading: true
 
 ================================================================================
+# <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> deployment​_version
+Source: https://docs.hopsworks.ai/latest/python-api/hsml/deployment_version/
+
+::: hsml.deployment_version
+    options:
+      heading_level: 1
+      members: false
+      show_root_full_path: true
+      show_root_heading: true
+
+::: hsml.deployment_version.DeploymentVersion
+    options:
+      heading_level: 2
+      show_root_heading: true
+
+================================================================================
 # <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> inference​_batcher
 Source: https://docs.hopsworks.ai/latest/python-api/hsml/inference_batcher/
 
@@ -37653,6 +38321,10 @@ Do not hand-edit the tables below; regenerate them instead.
 | 240039 | `UPDATE_DEPLOYMENT_MODE_ERROR` | 400 BAD_REQUEST | The deployment mode (Knative or Standard) cannot be changed while the deployment is running. Stop the deployment first. |
 | 240040 | `LOG_PERSISTENCE_NOT_SUPPORTED` | 400 BAD_REQUEST | Disk logging is only supported for Python model deployments. |
 | 240041 | `INVALID_FEATURE_LOGGING_CONFIG` | 400 BAD_REQUEST | Invalid feature logging configuration |
+| 240052 | `DEPLOYMENT_VERSION_NOT_FOUND` | 404 NOT_FOUND | Deployment version not found |
+| 240053 | `DEPLOYMENT_VERSION_MISMATCH` | 409 CONFLICT | The deployment changed since it was read. Reload it and retry. |
+| 240054 | `DEPLOYMENT_VERSION_CONFLICT` | 409 CONFLICT | A deployment version with this number was created concurrently. Retry. |
+| 240055 | `DEPLOYMENT_FILE_NOT_FOUND` | 400 BAD_REQUEST | Deployment artifact file not found |
 
 ## InferenceErrorCode
 
