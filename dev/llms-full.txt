@@ -5193,6 +5193,18 @@ For reading data streams, the Kafka Data Source supports reading a Kafka topic i
     df = connector.read_stream(topic="kafka_topic_name")
     ```
 
+Producers and consumers of your own, written with `confluent-kafka`, get their client configuration from the Kafka Data Source.
+The `kafka_connector` data source of a project is the connection the feature store clients write to Kafka with:
+
+=== "Python"
+
+    ```python
+    from confluent_kafka import Producer
+
+    connector = feature_store.get_data_source("kafka_connector").storage_connector
+    producer = Producer(connector.confluent_options())
+    ```
+
 ## Creating an External Feature Group
 
 Another important aspect of a data source is its ability to facilitate creation of external feature groups with the [Connector API](../../../concepts/fs/feature_group/external_fg.md). [External feature groups](../feature_group/create_external.md) are basically offline feature groups and essentially stored as tables on external data sources.
@@ -8456,13 +8468,17 @@ In this guide you will learn how to enable Change Data Capture (CDC) for online 
 ## Prerequisites
 
 Before you begin this guide we suggest you read the [Feature Group](../../../concepts/fs/feature_group/fg_overview.md) concept page to understand what a feature group is and how it fits in the ML pipeline.
-Subsequently [create a Kafka topic](../../projects/kafka/create_topic.md), this topic will be used for storing Change Data Capture events.
+
+The topic that stores the Change Data Capture events is a [Kafka topic](../../projects/kafka/create_topic.md) of the feature group's project, like its ingestion topic.
+Hopsworks creates it when the feature group is created or moves to it, if it does not exist yet.
+It deletes the topic with the feature group, or when the feature group moves to another notification topic, if Hopsworks created it and no other feature group uses it.
+A topic of another project cannot be a notification topic, because that project could delete it.
 
 ## Using Hopsworks APIs
 
 ### Create a Feature Group with Change Data Capture using Python
 
-To enable Change Data Capture for an online-enabled feature group using the Hopsworks APIs you need to [create a feature group](./create.md) and set the `notification_topic_name` properties value to the previously created topic.
+To enable Change Data Capture for an online-enabled feature group using the Hopsworks APIs you need to [create a feature group](./create.md) and set its `notification_topic_name` property to the topic to send the events to.
 
 === "Python"
 
@@ -8567,7 +8583,7 @@ Setting `topic_name` to an empty string clears the feature group override, so th
 
 !!! note "Topics of online-enabled feature groups must end in `_onlinefs`"
     The OnlineFS service subscribes to the topics matching the `.*_onlinefs` pattern, so a topic whose name does not match it is never consumed into the online feature store.
-    Administrators can change the pattern with the `onlinefs/kafka_consumer/topic_pattern` configuration option, or replace it with an explicit topic list as described in the [external Kafka cluster][external-kafka-cluster] guide.
+    Administrators can change the pattern in `Cluster Settings` → `OnlineFS`, as described in the [OnlineFS subscription][onlinefs-subscription] guide.
 
 ## Before you change the topic
 
@@ -8631,15 +8647,15 @@ Navigate to `Project Settings` → `Kafka` and use `Edit project topic` in the `
 As with a feature group topic, you are asked to confirm before the change is applied.
 
 !!! note
-    The `Project Topic` card is only shown when the cluster is configured to use an [external Kafka cluster][external-kafka-cluster], since that is the case in which the topic is not managed by Hopsworks.
+    The `Project Topic` card is only shown when the cluster is configured to use an [external Kafka cluster][external-kafka-cluster], since projects on the embedded cluster use their default topic.
 
 ## Topic creation
 
 When you set a topic that does not exist yet, Hopsworks creates it in the project with the cluster defaults for feature store topics.
 Topics count against the project's Kafka topic quota, which an administrator can raise as described in the [Kafka topics][kafka-topics] administration guide.
 
-When the cluster is configured to use an external Kafka cluster, Hopsworks does not provision topics.
-Create the topic in the external cluster first, otherwise ingestion fails as soon as the feature group starts producing to it.
+When the cluster is configured to use an [external Kafka cluster][external-kafka-cluster], Hopsworks creates the topic there too, unless it already exists, in which case it is used as it is.
+The `kafka_connector` data source of the project needs permission to create topics for that, as described in that guide.
 
 ## API Reference
 
@@ -29956,8 +29972,7 @@ Source: https://docs.hopsworks.ai/latest/user_guides/agents/
 This section serves to provide guides and examples for the common usage of agent tasks and agent deployments through the Hopsworks UI and APIs.
 
 - [Agent Tasks][how-to-run-an-agent-task]: Fire-and-forget agent executions that run as first-class Hopsworks jobs.
-- [Agent Deployments][how-to-run-an-agent-deployment]: Served interactive agents and LLM workflows.
-- [Chat Contract][the-chat-contract-for-conversational-agents]: How a conversational agent answers, so the chat panel, tracing, feedback and evaluation work with no per-agent configuration.
+- [Agent Deployments][how-to-run-an-agent-deployment]: Served conversational agents, the chat contract they answer by, and how to deploy, trace and talk to them.
 - [Agent Memory][agent-memory]: The four memory tiers a deployment provides, how to configure them, and what a person can see and erase.
 - [Feedback][feedback-on-what-an-agent-answered]: Verdicts on what an agent answered, from reviewers and from end users, and what reads them.
 - [Evaluation][evaluating-an-agent]: Suites of tasks graded by checks, the runs that execute them, and the gate a release reads.
@@ -30229,320 +30244,39 @@ visible via the Logs button on the execution row.
   `HOPS_`, `HOPSWORKS_`, `HOPSFS_`, and `AGENT_` are owned by the platform.
 
 ================================================================================
-# Agent Deployments
+# How To Run An Agent Deployment
 Source: https://docs.hopsworks.ai/latest/user_guides/agents/deployments/
 
 # How To Run An Agent Deployment
 
 ## Introduction
 
-Agent Deployments are **server-only KServe deployments with no model attached**.
-You provide an entrypoint Python script that starts a REST server.
-Hopsworks exposes it behind an endpoint.
-Use Agent Deployments for interactive agents and LLM workflows.
-The service needs to stay up and answer requests.
+An agent deployment is a long-running service that answers people: a chat assistant, a tool-using agent, or an LLM workflow behind an endpoint.
+You write it as ordinary Python with the framework you prefer, such as LangGraph, LlamaIndex, the OpenAI Agents SDK, or none.
+Hopsworks runs it, gives it an endpoint, and connects it to the rest of the platform.
 
-If you need a fire-and-forget background run, use [Agent Tasks](../tasks/index.md)
-instead.
+An agent built on `AgentApp` answers by the [chat contract][the-chat-contract]: AG-UI, the open agent–user protocol, with a few Hopsworks extensions.
+That is what makes everything around the agent work with no per-agent configuration:
 
-Common use cases:
+- the chat panel in the UI finds the agent, streams its replies and shows its progress;
+- the Python client talks to it by name and threads conversations for you;
+- traces, feedback, evaluation and memory key on the ids the contract carries, so a turn can be found, judged and replayed afterwards.
 
-- **Interactive assistants** - a chat or tool-using agent that stays online
-- **LLM workflows** - a deterministic sequence of retrieval, reasoning, and
-  generation steps that you want to expose as a service
-- **RAG-backed services** - an agent that reads Feature Store context and uses
-  it to answer questions
+For a fire-and-forget run that does a job and exits, use [Agent Tasks][how-to-run-an-agent-task] instead.
 
 ## Where to find it in the UI
 
 In the project sidebar, go to **Agents** and then **Agent Deployments**.
-The list page shows the agent deployments in the project, along with the same
-type of detail page you use for model deployments.
+Each agent's page shows its status, logs and configuration, its traces, and an **Evaluation** tab for its suites, monitors and analysis.
+**Chat in panel** at the top opens a chat panel beside the page to talk to it, and **Open in chat app** opens its [chat app][share-an-agent-through-a-chat-app].
 
-## Create and manage an agent deployment
-
-The most common way to create one is with the SDK or the CLI:
-
-```bash
-hops agent list
-hops agent create my_agent.py --name my_agent --requirements requirements.txt --environment my_agent
-hops agent start my_agent
-hops agent query my_agent --data '{"prompt": "hello"}'
-hops agent logs my_agent
-hops agent info my_agent
-hops agent stop my_agent
-hops agent delete my_agent --yes
-```
-
-Use `hops agent list` first to confirm auth and serving are reachable.
-
-```python
-import hopsworks
-
-
-project = hopsworks.login()
-ms = project.get_model_serving()
-
-deployment = ms.deploy_agent(
-    entry="my_agent.py",  # .py file or a dir with pyproject.toml
-    name="my_agent",
-    requirements="requirements.txt",
-    environment="my_agent",
-    upload_dir="Resources/agents",  # default
-)
-deployment.start(await_running=600)
-print(deployment.predict(inputs={"prompt": "hello"}))
-# After editing the code: re-create, then deployment.restart()
-```
-
-After creation, the deployment appears in the Agent Deployments list where you
-can inspect its status, logs, endpoints, and configuration.
-
-### Deploy from a Git repository
-
-An agent can be served from a Git repository instead of a project file.
-The repository is cloned every time the deployment starts, so a restart picks up whatever the branch points at.
-
-Supported providers are GitHub, GitLab, and BitBucket.
-Configure the provider credentials once under project settings, see [Configure a Git Provider](../../projects/git/configure_git_provider.md).
-
-```python
-deployment = ms.deploy_agent(
-    entry="src/agent.py",  # path inside the repository
-    name="my_agent",
-    git_url="https://github.com/my-org/my-agent.git",
-    git_provider="GitHub",
-    git_branch="main",
-    environment="my_agent",
-)
-```
-
-`entry` is interpreted relative to the repository root rather than as a HopsFS path.
-If you leave `git_branch` unset, the clone follows the repository's default branch.
-
-### Auto-redeploy on new commits
-
-A Git-backed agent can roll itself onto the branch HEAD whenever a new commit is pushed:
-
-```python
-deployment = ms.deploy_agent(
-    entry="src/agent.py",
-    name="my_agent",
-    git_url="https://github.com/my-org/my-agent.git",
-    git_provider="GitHub",
-    git_branch="main",
-    git_auto_redeploy=True,
-    environment="my_agent",
-)
-```
-
-Hopsworks polls the remote branch and rolls the deployment when it moves.
-The running version keeps serving requests until the new one is ready.
-
-The flag only applies to Git-backed agents, and Hopsworks rejects it for an agent deployed from a project file.
-A stopped deployment is not rolled; it clones the branch HEAD on its next start.
-
-The deployment's **Artifact files** card shows the repository, the branch, the commit it is running, and whether auto-redeploy is enabled.
-The entrypoint links to the file in the repository at that commit.
-
-## Small example
-
-The file below shows a simple agent program that uses LlamaIndex, FastAPI,
-and OpenTelemetry.
-The deployment runs the file with `python`, so the file is the server: it listens on port 8080, answers the readiness probe on `/`, and serves `/predict` and `/v1/models/<name>:predict`, the two paths a prediction request arrives on.
-
-Set `ANTHROPIC_API_KEY` in the deployment environment. Hopsworks injects the
-`OTEL_EXPORTER_OTLP_*` environment variables for the deployment, so the
-OpenTelemetry exporter can stay configuration-free.
-
-```python
-import asyncio
-import os
-
-import uvicorn
-from fastapi import FastAPI
-from llama_index.core.agent.workflow import ReActAgent
-from llama_index.core.tools import FunctionTool
-from llama_index.llms.anthropic import Anthropic
-from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk import trace as trace_sdk
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-
-
-def add(a: float, b: float) -> float:
-    """Adds two numbers."""
-    return a + b
-
-
-def subtract(a: float, b: float) -> float:
-    """Subtracts two numbers."""
-    return a - b
-
-
-def multiply(a: float, b: float) -> float:
-    """Multiplies two numbers."""
-    return a * b
-
-
-def divide(a: float, b: float) -> float:
-    """Divides two numbers."""
-    if b == 0:
-        raise ValueError("Cannot divide by zero.")
-    return a / b
-
-
-def build_tracer_provider():
-    endpoint = os.environ.get(
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-        "http://localhost:4318/v1/traces",
-    )
-
-    tracer_provider = trace_sdk.TracerProvider()
-    tracer_provider.add_span_processor(
-        SimpleSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
-    )
-    return tracer_provider
-
-
-class AgentPredictor:
-    def __init__(self):
-        self.tracer_provider = build_tracer_provider()
-
-        LlamaIndexInstrumentor().instrument(tracer_provider=self.tracer_provider)
-
-        llm = Anthropic(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            temperature=0.0,
-        )
-
-        tools = [
-            FunctionTool.from_defaults(add),
-            FunctionTool.from_defaults(subtract),
-            FunctionTool.from_defaults(multiply),
-            FunctionTool.from_defaults(divide),
-        ]
-
-        self.agent = ReActAgent(
-            tools=tools,
-            llm=llm,
-        )
-
-    async def _predict_async(self, inputs):
-        prompt = inputs.get("prompt", "")
-        result = await self.agent.run(prompt)
-        return {"answer": str(result)}
-
-    def predict(self, inputs):
-        return asyncio.run(self._predict_async(inputs))
-
-
-predictor = AgentPredictor()
-
-agent_app = FastAPI()
-
-FastAPIInstrumentor.instrument_app(
-    agent_app,
-    tracer_provider=predictor.tracer_provider,
-)
-
-
-@agent_app.get("/")
-def ready():
-    return {"status": "ok"}
-
-
-def predict_instances(payload: dict):
-    instances = payload.get("instances", [payload])
-    return {"predictions": [predictor.predict(i) for i in instances]}
-
-
-# Where the Hopsworks inference endpoint forwards a request.
-@agent_app.post("/predict")
-def predict(payload: dict):
-    return predict_instances(payload)
-
-
-# KServe's path, which deployment.predict() uses inside the cluster.
-@agent_app.post("/v1/models/{target}")
-def kserve_predict(target: str, payload: dict):
-    return predict_instances(payload)
-
-
-@agent_app.post("/query")
-def query(payload: dict):
-    return predictor.predict(payload)
-
-
-if __name__ == "__main__":
-    uvicorn.run(agent_app, host="0.0.0.0", port=8080)
-```
-
-## Tracing
-
-Agent Deployments can be configured with OpenTelemetry tracing.
-
-When tracing is enabled, Hopsworks automatically provisions four online,
-Delta-backed feature groups in the project's Feature Store:
-
-- `otel_spans` - root spans and trace summary fields
-- `otel_span_attributes` - span attributes as key-value pairs
-- `otel_events` - span events
-- `otel_event_attributes` - event attributes as key-value pairs
-
-The Traces UI reads from these feature groups, and the first traced deployment
-in a project creates them automatically if they do not already exist.
-
-After that, choose one of these storage modes:
-
-- `online` - the default; writes traces to only online
-- `offline` - writes traces to only offline. You will no be able to see the traces summaries in the UI, but you can
-  use the hopsworks-api to read the offline feature groups and reconstruct the traces from there.
-- `both` - export traces to both online and offline feature groups. This is the recommended option for production deployments, as it allows you to see the traces in the UI and also have them stored cost-effectively for long-term retention.
-
-## Next steps
-
-- Scheduled, non-interactive coding agent: [Agent Tasks](../tasks/index.md)
-- Model-backed online predictor: use the Model Deployments guides under MLOps
-- Agent-serving dependencies: see the environment guides for cloning Python
-  environments and installing requirements
-
-================================================================================
-# Chat Contract
-Source: https://docs.hopsworks.ai/latest/user_guides/agents/chat_contract/
-
----
-description: The chat contract a conversational agent deployment answers by: the manifest it publishes, the shape of a turn, streaming, threaded conversations, refusals, and who a turn is for.
----
-
-# The Chat Contract For Conversational Agents
-
-## Introduction
-
-An agent deployment can serve anything you like on its endpoint.
-A *conversational* agent is one that answers by the chat contract, a small HTTP contract that tells Hopsworks how to talk to it.
-
-Answering by it is what makes the rest of the platform work with no per-agent configuration.
-The chat panel in the UI finds the agent, knows whether it streams, and renders its progress and its transcript.
-The Python client talks to it by name and threads conversations for you.
-Traces, feedback and evaluation key on the ids the contract carries, so a turn can be found, judged and replayed afterwards.
-
-You do not implement the contract by hand.
-`AgentApp` is a FastAPI subclass that publishes it for you, and your agent stays ordinary Python.
-
-!!! note "Which kind of agent do I have?"
-    An agent that serves `/predict` is a plain agent deployment, reached with `deployment.predict(...)`.
-    An agent built on `AgentApp` also speaks this contract, so it is reached with `agent.chat(...)` and by the chat panel.
-    Both are created and run the same way, see [How To Run An Agent Deployment][how-to-run-an-agent-deployment].
-
-## The smallest agent that speaks it
+## Write the agent
 
 Serving an agent needs the `agents` extra, `pip install 'hopsworks[agents]'`.
 
 ```python
 from hopsworks_agents.protocol import AgentApp, AgentResponse
+
 
 agent_app = AgentApp(
     name="Support agent",
@@ -30564,98 +30298,197 @@ if __name__ == "__main__":
     uvicorn.run(agent_app, host="0.0.0.0", port=8080)
 ```
 
-Deploy the file as an agent deployment and the chat panel works with nothing further to configure.
+`my_agent` stands for whatever does the work: a LangGraph graph, a LlamaIndex agent, a plain function.
+`AgentApp` is a FastAPI application that serves the chat contract around your handler, so the file above is a complete agent.
 
 !!! warning "The entrypoint has to serve"
     Hopsworks runs your entrypoint with `python <file>`.
     Without the `uvicorn.run(...)` block the script defines the app, exits successfully, and the deployment never becomes ready.
 
-## What the contract is
+## Deploy and manage it
+
+```python
+import hopsworks
+
+
+project = hopsworks.login()
+agents = project.get_agent_serving()
+
+agent = agents.deploy_agent(
+    "support_agent.py",
+    name="support_agent",
+    requirements="requirements.txt",
+    environment="support_agent",
+    tracing={"enabled": True},
+)
+agent.start()
+
+reply = agent.chat("Where is my order?")
+print(reply.text)
+```
+
+The entry is a `.py` file, or a directory with a `pyproject.toml` that is built as a package.
+`deploy_agent` creates the agent on the first call and updates it on the next ones.
+It leaves the agent's running state alone, so after changing the code call `agent.restart()` to roll a running agent onto it.
+`requirements` are installed into `environment`, a Python environment of the project that is created when it does not exist yet.
+
+The same lifecycle from the terminal:
+
+```bash
+hops agent list                      # what agents exist
+hops agent create support_agent.py --name support_agent \
+  --requirements requirements.txt --environment support_agent
+hops agent start support_agent       # waits until it is running
+hops agent info support_agent        # status, endpoint, source and commit
+hops agent logs support_agent        # startup and request errors
+hops agent stop support_agent
+hops agent delete support_agent --yes
+```
+
+Run `hops agent list` first to confirm that authentication and serving are reachable.
+
+### Deploy from a Git repository
+
+An agent can be served from a Git repository instead of a project file.
+The repository is cloned every time the deployment starts, so a restart picks up whatever the branch points at, and every file beside the entry comes along with it.
+
+Supported providers are GitHub, GitLab and BitBucket.
+Configure the provider credentials once under project settings, see [Configure a Git Provider](../../projects/git/configure_git_provider.md).
+
+```python
+agent = agents.deploy_agent(
+    "src/agent.py",  # a path inside the repository
+    name="support_agent",
+    git_url="https://github.com/my-org/my-agent.git",
+    git_provider="GitHub",
+    git_branch="main",
+    environment="support_agent",
+)
+```
+
+The entry is relative to the repository root rather than a HopsFS path.
+Without `git_branch` the clone follows the repository's default branch.
+
+### Auto-redeploy on new commits
+
+With `git_auto_redeploy=True`, a Git-backed agent rolls itself onto the branch head whenever a new commit is pushed.
+Hopsworks polls the branch and rolls the deployment when it moves, and the running version keeps answering until the new one is ready.
+Hopsworks rejects the flag for an agent deployed from a project file, because there is no branch to follow.
+A stopped agent is not rolled; it clones the branch head on its next start.
+
+The agent's **Artifact files** card shows the repository, the branch, the commit it is running, and whether auto-redeploy is on.
+
+## The chat contract
+
+An agent built on `AgentApp` speaks [AG-UI](https://docs.ag-ui.com), the open protocol between an agent and the interface a person uses.
+Any AG-UI client, such as a [CopilotKit](https://www.copilotkit.ai) page, can talk to it with no adapter, and so do the Hopsworks chat panel and Python client.
+What Hopsworks adds rides in AG-UI's own extension points, under a `hopsworks` key, so a client that knows nothing of it ignores it.
+
+You do not implement the contract by hand: `AgentApp` serves these routes around your handler.
 
 | Route | Purpose |
 | --- | --- |
 | `GET /.well-known/hopsworks-agent.json` | The manifest: what this agent is and what it can do |
-| `POST /v1/chat` | One turn, one reply |
-| `POST /v1/chat/stream` | The same turn, streamed as server-sent events |
+| `POST /v1/run` | One AG-UI run: a `RunAgentInput` in, AG-UI events out as server-sent events |
+| `POST /v1/chat` | The same turn as one JSON reply, for a caller that does not stream |
 | `GET /health` | Liveness, the process is up |
 | `GET /ready` | Readiness, a handler is registered and memory, if configured, is reachable |
 
 ### The manifest
 
-The manifest is how a client discovers an agent rather than assuming it.
-It carries the agent's name, description and version, the welcome message and suggested prompts the panel shows, the modalities it accepts and returns, the routes it serves, and the capabilities it has.
+AG-UI has no way for a client to discover an agent, so the manifest is how the chat panel finds it.
+It carries the agent's name and description, the welcome message and suggested prompts the chat panel shows, the routes it serves, and its capabilities.
+The capabilities are AG-UI's `AgentCapabilities`, and what only Hopsworks reads is under `capabilities.custom.hopsworks`.
 
-This is what the agent above publishes, abridged to the keys this page talks about.
+This is what the agent above publishes, abridged to the keys this page talks about:
 
 ```json
 {
-  "protocol": "hopsworks-agent",
-  "protocol_version": "1.4",
-  "agent": {
-    "name": "Support agent",
-    "description": "Answers questions about orders",
-    "version": "1.0.0",
-    "framework": "custom"
-  },
-  "endpoints": {"chat": "/v1/chat", "feedback": "/v1/feedback"},
+  "protocol": "ag-ui",
+  "protocol_version": "1.0",
+  "agent": {"name": "Support agent", "description": "Answers questions about orders"},
+  "endpoints": {"run": "/v1/run", "chat": "/v1/chat", "feedback": "/v1/feedback"},
   "capabilities": {
-    "streaming": false,
-    "conversation_history": false,
-    "tool_events": false,
-    "feedback": true,
-    "trace_correlation": false
+    "transport": {"streaming": true},
+    "humanInTheLoop": {"feedback": true},
+    "custom": {
+      "hopsworks": {
+        "streaming": false,
+        "conversation_history": false,
+        "tool_events": false,
+        "feedback": true,
+        "trace_correlation": false
+      }
+    }
   },
-  "ui": {
-    "welcome_message": "How can I help?",
-    "suggested_prompts": ["Where is my order?"],
-    "allow_markdown": true
-  }
+  "ui": {"welcome_message": "How can I help?", "suggested_prompts": ["Where is my order?"]}
 }
 ```
 
-The agent above registers a `chat` handler and nothing else, so most capabilities are reported `false` and `endpoints` has no `stream`.
-Registering a `@agent_app.stream` handler adds both; configuring memory turns `conversation_history` on.
+Each Hopsworks capability is read by something.
+`streaming` says the answer arrives token by token rather than whole, which is what the chat panel's stream toggle is about.
+The chat panel hides the transcript view and the feedback control when theirs are false, and the evaluation runner refuses to grade an agent whose `trace_correlation` is false.
+Registering a `@agent_app.stream` handler turns `streaming` on, and configuring [memory][agent-memory] turns `conversation_history` on.
 
-Each capability is read by something.
-The chat panel hides the stream toggle, the transcript view and the feedback control when they are false, and the evaluation runner refuses to grade an agent whose `trace_correlation` is false.
-The routes matter for the same reason: a client that cannot find them falls back to the protocol's defaults, which is how an agent served on a custom path becomes unreachable without an error anywhere.
+### One run
 
-### One turn
-
-A request carries the new message and, optionally, the conversation it belongs to and who it is for.
-A reply carries the ids, the message, and what the turn cost.
+A run sends the new message, as an AG-UI `RunAgentInput`:
 
 ```json
 {
-  "id": "response_01HZ...",
-  "conversation_id": "conv_01HZ...",
-  "message": {"id": "msg_01HZ...", "role": "assistant", "content": []},
-  "citations": [],
-  "usage": {"input_tokens": 13, "output_tokens": 7},
-  "metadata": {},
-  "status": "completed"
+  "threadId": "conv_01HZ...",
+  "runId": "run_01HZ...",
+  "messages": [{"id": "msg_1", "role": "user", "content": "Where is my order?"}],
+  "tools": [],
+  "context": [],
+  "forwardedProps": {"hopsworks": {"subject": "customer-7"}}
 }
 ```
 
-Three things are worth knowing when writing the handler.
+The reply is a stream of AG-UI events:
 
-`request.conversation_id` is always set, generated on the first turn, so it can be passed straight to a LangGraph checkpointer or a LlamaIndex chat store as a thread id.
-`request.text` is the plain message text, and `request.to_framework_messages()` returns the `[{"role", "content"}]` shape that LangChain, LangGraph and LlamaIndex accept.
+| Event | What it carries |
+| --- | --- |
+| `RUN_STARTED` | The thread and the run, and the trace id under `metadata.hopsworks` |
+| `TEXT_MESSAGE_START`, `_CONTENT`, `_END` | The answer, piece by piece |
+| `TOOL_CALL_START`, `_ARGS`, `_END`, `_RESULT` | A tool call the agent made, with its arguments and its result |
+| `STEP_STARTED`, `STEP_FINISHED` | A step the agent reported, see [progress events][progress-events] |
+| `CUSTOM` named `hopsworks.media` | An image, file or audio part of the answer |
+| `RUN_FINISHED` | Token usage, and the trace id, subject and citations under `result.hopsworks`, plus `text` when the agent's final answer rewrote the text it streamed; an `outcome` of `interrupt` when the agent [asks a person first][asking-a-person-first] |
+| `RUN_ERROR` | Why the run failed, see [refusals][refusals] |
+
+The trace id is in `RUN_STARTED` so that a client still has it when the run fails.
+A run that is quiet for a while (a long model call, a slow tool) sends an SSE comment line (`: keep-alive`) every 15 seconds, so a proxy in front does not close it; comments are not events.
+
+For a script or a quick check, `POST /v1/chat` answers the same turn in one JSON reply instead of a stream:
+
+```json
+{"message": {"role": "user", "content": [{"type": "text", "text": "Where is my order?"}]},
+ "conversation_id": "conv_01HZ...", "subject": "customer-7"}
+```
+
+```json
+{"id": "resp_...", "conversation_id": "conv_01HZ...", "status": "completed",
+ "message": {"id": "msg_...", "role": "assistant", "content": [{"type": "text", "text": "..."}]},
+ "citations": [], "usage": {"input_tokens": 120, "output_tokens": 40}, "metadata": {"trace_id": "..."}}
+```
+
+`status` is `interrupted` when the agent [asks a person first][asking-a-person-first] (the questions are under `interrupts`, and a request with `resume` answers them), and `failed` when the agent reported the turn as failed.
+
+In the handler, `request.text` is the message text, and `request.to_framework_messages()` returns the `[{"role", "content"}]` shape that LangChain, LangGraph and LlamaIndex accept.
+`request.conversation_id` is the run's thread, generated on the first turn, so it can be passed straight to a LangGraph checkpointer or a LlamaIndex chat store as a thread id.
 Returning a plain `str` from the handler is shorthand for `AgentResponse.text(...)`.
 
-### Conversations are threaded server-side
+### Conversations
 
-The request carries only the new message.
-Pass the `conversation_id` from a reply into the next request and the turns belong to one conversation.
-Leave it out and a new conversation starts clean.
-
-What history means depends on whether the deployment configures memory.
-Without it, the conversation id is a thread key your own framework uses.
-With it, Hopsworks keeps the transcript and hands the handler the recent turns.
+Send the `threadId` from a run's `RUN_STARTED` with the next run, and the turns belong to one conversation; send an empty one and a new conversation starts.
+An AG-UI client may also resend the conversation's earlier messages.
+With [memory][agent-memory] configured, Hopsworks keeps the transcript, hands the handler the recent turns, and ignores the resent messages, so a client cannot rewrite what was said.
+Without it, the resent messages reach the handler as `request.prior_messages`, and `to_framework_messages()` returns them before the new message.
 
 ### Streaming
 
-Register an async generator and the manifest advertises `streaming: true` automatically.
+Register an async generator and the answer streams token by token:
 
 ```python
 @agent_app.stream
@@ -30664,12 +30497,12 @@ async def stream(request):
         yield delta
 ```
 
-`/v1/chat/stream` then emits the reply as it is produced, and `/v1/chat` still works by collecting the stream.
-An agent that registers only a `@chat` handler still answers the streaming route, as a single completed event, so a caller never has to ask which handler was written.
+Each piece goes out as a `TEXT_MESSAGE_CONTENT` event, and `/v1/chat` still works by collecting the stream.
+An agent that registers only a `@chat` handler answers a run with one text message, so a caller never has to ask which handler was written.
 
-### A refusal arrives as a refusal
+### Refusals
 
-Raise `AgentError` for anything the agent declines to do.
+Raise `AgentError` for anything the agent declines to do:
 
 ```python
 from hopsworks_agents.protocol import AgentError
@@ -30679,30 +30512,88 @@ from hopsworks_agents.protocol import AgentError
 async def chat(request):
     if not request.text:
         raise AgentError("Say something first.", code="empty_message", status_code=400)
+    return await my_agent.ainvoke(request.text)
 ```
 
-The caller receives the protocol's error envelope in `detail` — a code it can branch on, a message for a person, and whether a retry is worth it — under the handler's `status_code`.
-That status defaults to `500`, so pass a 4xx for anything the agent declined rather than failed at.
-A client tells *the agent declined* from *the agent broke* by that status, and an evaluation run uses the same distinction when it decides whether a task failed or the harness did.
+A run ends in `RUN_ERROR` with the error's `message` and `code`, and with the handler's `status_code` and whether a retry is worth it under `metadata.hopsworks`.
+On `/v1/chat` the same error is the HTTP status, with `detail` as the body.
+The status defaults to `500`, so pass a 4xx for anything the agent declined rather than failed at.
+A client tells a refusal from a breakage by that status, and an evaluation run uses the same distinction when it decides whether the agent failed a task or did not answer it.
 
 ### Who a turn is for
 
-A turn may name the person it is for.
+A turn may name the person it is for:
 
 ```python
-reply = agent.chat("where is my order?", subject="customer-7")
+reply = agent.chat("Where is my order?", subject="customer-7")
 ```
 
-The subject travels per request rather than per deployment, because one deployment serves everybody.
-A turn that names nobody falls back to its own conversation, and `ctx.subject_source` says which happened: `client` when the caller asserted one, `conversation` when it fell back, and `app` when the agent worked it out during the turn.
+On the wire it is `forwardedProps.hopsworks.subject`.
+The subject travels with each request rather than with the deployment, because one deployment serves everybody, and it is what long-term memory is keyed by.
+A turn that names nobody falls back to its own conversation, and `ctx.subject_source` says which happened: `client` when the caller named someone, `conversation` when it fell back, and `app` when the agent worked it out during the turn.
 
 !!! warning "Identification, not authentication"
-    The transport authenticates the agent, not the person using it.
+    The endpoint authenticates whoever calls the agent, not the person using it.
     A subject is only as trustworthy as whatever your agent derived it from, so do not treat it as proof of identity.
 
-## Progress events
+### Asking a person first
 
-With `AgentApp(tool_events=True)`, the steps an agent takes reach the caller as progress chips while it works.
+An agent can pause a turn to ask a person, and go on with their answer, for an action that should not happen without approval:
+
+```python
+@agent_app.chat
+async def chat(request, ctx):
+    order = await find_order(request.text)
+    answer = ctx.interrupt(
+        f"Refund {order.amount} to order {order.id}?",
+        key=f"refund-{order.id}",
+        response_schema={
+            "type": "object",
+            "properties": {"approved": {"type": "boolean"}},
+            "required": ["approved"],
+        },
+    )
+    if answer.cancelled or not answer.payload.get("approved"):
+        return "Understood, no refund."
+    await refund(order)
+    return "Refunded."
+```
+
+The first time, `ctx.interrupt` ends the run with an AG-UI interrupt: `RUN_FINISHED` whose `outcome` names the question, its reason and the JSON Schema of the answer.
+The chat panel shows it as a card: Approve and Reject for a yes or no question, a form built from the schema otherwise, and Dismiss to decline to answer.
+The answer resumes the turn with a new run on the same thread whose `resume` answers the question; the turn runs again from the start, and this time `ctx.interrupt` returns the answer.
+
+- Everything before the call runs again when the turn resumes, so ask before acting, never after.
+- `key` names the question the same way on every run of the turn; without it the question is named by its place in the turn.
+- The agent keeps the paused turn's request and what it asked, so a resume carries only the answers and the turn runs again with the same message and context. A resume that answers a question that was not asked, or one that has expired, is refused, and so is one on a conversation that is not waiting on a question (answered already): send the message again instead.
+- With agent memory, the open questions are stored with it, so any replica can take the answer and a restart forgets nothing; two replicas given the same answer do not both act on it. Without memory they are kept by the replica that asked, and an answer that reaches another one is refused.
+- The stored question is deleted once it is answered, when a new message moves the conversation on instead, or when the conversation is deleted.
+- A turn may ask several times; each pause asks one question, and the client answers only what is open.
+- `answer.cancelled` is a person declining to answer; a refusal to go ahead is an answer with a payload that says so.
+- `ctx.interrupt` also takes `reason` (`confirmation`, the default, `input_required` or `tool_call`), `tool_call_id` for a question about a tool call, `expires_in` (seconds; an answer after that is refused) and `metadata` for the client.
+- A turn may pause at most 5 times in an evaluation trial; the runner fails the trial as the agent's when it keeps asking.
+
+A resume the agent refuses answers with an HTTP error before any event:
+
+| Status | Code | When |
+| --- | --- | --- |
+| 409 | `nothing_to_resume` | The conversation is not waiting on a question: it was answered already, or a new message moved it on |
+| 409 | `resume_in_progress` | Another answer to the same question is running; it is taken again after 15 minutes if that one never finished |
+| 400 | `unanswered_interrupts` | Not every open question was answered |
+| 400 | `unknown_interrupt` | An answer names a question that was not asked |
+| 400 | `interrupt_expired` | The question's `expires_in` passed |
+| 503 | `pending_unavailable` | The store holding the open questions could not be read or written; the question was not asked |
+
+A stored question is kept for a day past its expiry, or 30 days when it has none.
+
+From Python, a paused reply has `reply.interrupted` and `reply.interrupts`, and `agent.chat(None, conversation_id=reply.conversation_id, resume={"refund-42": {"approved": True}})` answers it.
+In an evaluation run nobody is there to answer: the runner answers from the task context's `interrupt_answers`, by question id, and cancels the rest.
+
+### Progress events
+
+With `AgentApp(tool_events=True)`, what the agent does reaches the caller while it works, and the chat panel shows it as progress chips.
+Tool calls need no code: when tracing is on and the framework is instrumented, each tool call goes out as AG-UI tool-call events, with its arguments and its result.
+Other steps, such as a retrieval or a plan, the agent reports itself:
 
 ```python
 @agent_app.chat
@@ -30713,12 +30604,12 @@ async def chat(request, ctx):
     return AgentResponse.text(text=answer)
 ```
 
-Pass the same `event_id` for a step's start and end so the client shows one chip that updates rather than two chips.
-When tracing is on and the framework is instrumented, tool events are emitted automatically with no code in the agent.
+Each report is an AG-UI `STEP_STARTED` or `STEP_FINISHED` event, with the status, message and data under its `metadata.hopsworks`.
+Pass the same `event_id` for a step's start and end, so the client shows one chip that updates rather than two.
 
-## The handler context
+### The handler context
 
-Declare a second parameter and the SDK passes the turn's context.
+Declare a second parameter and the SDK passes the turn's context:
 
 ```python
 @agent_app.chat
@@ -30727,39 +30618,294 @@ async def chat(request, ctx):
     return AgentResponse.text(text="ok")
 ```
 
-`ctx` exposes the conversation, message and turn ids, the deployment id, a logger, and `emit_event`.
-When the deployment configures memory it also exposes `history`, `summary`, `state()`, `recall`, `remember`, `forget` and `system_context()`.
+`ctx` exposes the conversation, message and turn ids, the deployment id, the subject, a logger, and `emit_event`.
+When the deployment configures memory it also exposes `history`, `summary`, `state()`, `recall`, `remember`, `forget` and `system_context()`, see [Agent Memory][agent-memory].
+`request` also carries what the run sent beyond the message: `run_id`, `messages`, `tools`, `state` and `forwarded_props`.
 
-## Calling a conversational agent from Python
+### Talking to an agent from Python
 
 ```python
-import hopsworks
-
-
-project = hopsworks.login()
-agents = project.get_agent_serving()
-
 agent = agents.get_agent("support_agent")
-print(agent.manifest()["capabilities"])
+print(agent.manifest()["capabilities"]["custom"]["hopsworks"])
 
-reply = agent.chat("where is my order?", subject="customer-7")
+reply = agent.chat("Where is my order?", subject="customer-7")
 print(reply.text, reply.conversation_id, reply.trace_id)
 
 agent.chat(
-    "and the second one?",
+    "And the second one?",
     conversation_id=reply.conversation_id,
     subject="customer-7",
 )
 
-for frame in agent.chat_stream("tell me more").events():
+for frame in agent.chat_stream("Tell me more").events():
     print(frame.type, frame.text or "")
 ```
 
+`chat_stream` sends an AG-UI run and reads its events; each frame keeps the event it came from in `frame.raw`.
 `reply.trace_id` is the thread back to everything else: the turn's trace, the feedback given on it, and the evaluation trials that replayed it.
+`chat` waits 120 seconds by default; pass `timeout=` for an agent whose turns take longer.
+
+## Share an agent through a chat app
+
+The chat panel is for project members working in Hopsworks.
+To put an agent in front of other people, such as support staff, a pilot customer, or a colleague trying it out, create its **chat app**: a ready-made chat page, run as a Hopsworks [app][apps], that speaks AG-UI to the agent.
+
+Create it in any of three places:
+
+- tick **Create a chat app** when you deploy the agent;
+- select **Open in chat app** at the top of the agent's page, next to **Chat in panel**: it creates the app when the agent has none, and afterwards opens it in a new tab;
+- call it from Python:
+
+```python
+agent = project.get_agent_serving().get_agent("support_agent")
+app = agent.create_chat_app()  # named support_agent_chat; pass name= for another
+print(app.app_url)
+
+agent.chat_app()  # the app, or None when the agent has none
+```
+
+The app streams the agent's replies and shows its tool calls, takes attachments, shows the agent's questions as an approval card, and lets people rate a reply.
+Its page is [CopilotKit](https://github.com/CopilotKit/CopilotKit)'s open-source chat, served with CopilotKit's runtime by the app itself: nothing is sent to CopilotKit.
+A new conversation opens with the agent's `welcome_message` and its `suggested_prompts` (the `AgentApp` arguments the chat panel also uses), and a sidebar lists each person's own conversations, so they can go back to one; an agent with [memory][agent-memory] keeps them across restarts of the app.
+It is an ordinary app otherwise: its logs, settings and resources are on its page under **Apps**, and it scales to zero when nobody uses it.
+
+**Who may do what.**
+A data owner or a data scientist creates, opens and customizes the chat app; deleting it (`agent.delete_chat_app()`, or deleting the agent) and turning its public link on or off take a data owner.
+The app takes 20 messages a minute from each person, and 100 a minute from all public visitors together (`CHAT_MAX_RUNS_PER_MINUTE`, `CHAT_MAX_PUBLIC_RUNS_PER_MINUTE`); a request, attachments included, may be 10 MB (`CHAT_MAX_BODY_BYTES`), and a text file attached to a message 256 KB.
+
+**Who can open it.**
+Project members open it with their Hopsworks login.
+To share it with people who have no Hopsworks account, turn on the app's public link on its page, or with `app.make_public()`; anyone holding the link can then chat with the agent, until you turn the link off.
+Public links need public apps to be enabled on the cluster.
+
+**Who is chatting.**
+The app decides, never the page.
+A project member chats as their Hopsworks user, the same subject the chat panel uses, so the agent's [memory][agent-memory] of them is the same in both, and the page says who they are signed in as.
+Hopsworks tells the app who the member is with a signature only the app can check, so nobody else can claim to be them.
+Anyone who opened the public link is anonymous: the app sets a cookie with a random id in their browser and derives their subject from it, so each visitor has their own memory.
+Each person's conversations are kept apart: whatever conversation a page asks for, it only ever reaches that person's own.
+No serving key reaches the browser: the app's server talks to the agent inside the cluster, and only forwards turns and feedback, never the routes that read or erase memory.
+
+**What people thought of the answers.**
+A thumbs up or down given in the app reaches the agent's **Feedback** tab marked **via chat app**, and `Feedback.given_via` is `chat-app` in Python, so you can tell it from feedback given in the chat panel.
+
+**Changing it.**
+Set these as the app's environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `CHAT_TITLE` | The page title; the agent's name by default |
+| `CHAT_WELCOME` | The first thing the page says |
+| `CHAT_SHOW_TOOL_CALLS` | `false` hides tool calls and steps from visitors |
+| `CHAT_ACCENT_COLOR` | The accent colour, such as `#0b5fff` |
+| `CHAT_LOGO_URL` | An `https://` image for the header |
+| `CHAT_THEME_DIR` | A folder of the project, such as `Resources/chat-theme`, with your own styles and logo |
+| `CHAT_MAX_RUNS_PER_MINUTE` | Turns per visitor per minute; 20 by default |
+
+For a theme folder, upload a `theme.css` and a logo named `logo.svg`, `logo.png`, `logo.jpg` or `logo.webp` to it, set `CHAT_THEME_DIR`, and restart the app.
+`theme.css` is loaded after the page's own styles, so it can change anything they set; the page's colours are CSS variables such as `--hw-accent`, `--hw-bg` and `--hw-surface` (the chat itself takes its accent from `--primary`), so a theme can be as small as one line:
+
+```css
+:root { --hw-accent: #0b5fff; --primary: #0b5fff; --hw-bg: #f4f7ff; }
+```
+
+**Customizing it.**
+To change more than the variables and a theme allow, such as its layout, its header, what it shows around the chat, or routes of its own, run the app from a folder of your project.
+Select **Customize…** in the menu next to **Open in chat app**, or call it from Python:
+
+```python
+app = agent.customize_chat_app()  # runs from Resources/chat-apps/support_agent_chat
+```
+
+The app restarts and copies its template into `Resources/chat-apps/<app name>`, without overwriting anything already there, and runs from that folder from then on:
+
+| File | What it is |
+| --- | --- |
+| `server.mjs` | The app's server, with its settings and any routes of its own |
+| `web/main.jsx` | The page (React), which starts as the default chat page, whole |
+| `web/theme.css` | The page's look |
+| `AGENTS.md`, `CLAUDE.md` | How the app is put together and what to change where, for you and for coding agents |
+
+Open the folder in the Hopsworks terminal and change it, by hand or with a coding agent, which reads `AGENTS.md` first.
+Restart the app to see a change: `app.redeploy()` in Python, or from its page under **Apps**.
+The app rebuilds its page when `web/` changed; if the folder fails to load or build, the app logs why and serves the default page, so the chat stays up.
+
+The chat itself stays the platform's: who is chatting, whose conversations are whose, and how the agent is reached come from the `@hopsworks/agent-chat` package in the app's image, so a customized app keeps getting fixes with Hopsworks.
+To go back to the default app, remove the app's `CHAT_APP_DIR` variable and restart it; the folder stays.
+For a client written from scratch, use [the chat contract][the-chat-contract] instead.
+
+Deleting the agent deletes its chat app.
+
+**The chat in an app of your own.**
+An app that already has a page of its own (a FastAPI or Flask app, say) can hold the chat instead of being one.
+This is opt-in per app and off by default: name the agent on the app, with `agent=` in `create_app()` or the **Agent** setting on the app's page, and Hopsworks starts the app as it starts a chat app, with the agent's in-cluster address in `CHAT_AGENT_URL` (and `CHAT_AGENT_HOST`) and the key it signs members' names with in `HOPSWORKS_APP_IDENTITY_KEY`.
+An app without an agent gets neither.
+Only an agent deployment of the same project can be named, and such an app is not the agent's chat app: the agent's page does not find it, and deleting the agent leaves it alone.
+
+The app then runs the chat server beside its own server and forwards a path of its own to it, so the chat server still decides who is chatting from the signed headers, keeps each person's conversations apart, and reaches the agent inside the cluster only.
+With FastAPI, on the `python-app-pipeline` environment (it has FastAPI, uvicorn, httpx and the `@hopsworks/agent-chat` package):
+
+```python
+apps = project.get_app_api()
+app = apps.create_app(
+    "support_ui",
+    app_path="Resources/support_ui/app.py",
+    app_kind="CUSTOM",
+    entrypoint_command=(
+        "bash -lc 'cd \"$APP_DIR\" "
+        '&& node -e "import(\\"@hopsworks/agent-chat\\")'
+        '.then((m) => m.buildPage(process.cwd(), \\"/tmp/chat-page\\"))" '
+        "&& (hopsworks-agent-chat --port 8081 --base-path chat/ &) "
+        "&& exec uvicorn app:app --host 0.0.0.0 --port \"$APP_PORT\"'"
+    ),
+    app_port=8000,
+    readiness_probe_path="/api/hello",
+    agent=agent,  # the Agent, or its id
+    db_access=False,
+)
+app.run()
+```
+
+The start command does three things: it builds the page from `web/main.jsx` with the package's `buildPage` (into the pod's temporary space, so nothing is written to the project), starts `hopsworks-agent-chat` (the chat server alone, no page; `--help` lists its options, `CHAT_PORT` and `CHAT_BASE_PATH` are the same as variables), and starts the app's own server on the app's port.
+`Resources/support_ui/app.py` serves the page and forwards `chat/*` to the chat server, as it is, streamed: the method and body, the `Cookie` header and the `Set-Cookie` headers coming back, and the headers the Hopsworks proxy set, which are how the chat server knows who is chatting.
+
+```python
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
+
+
+CHAT = "http://127.0.0.1:8081"  # hopsworks-agent-chat, beside this server
+FORWARDED = {
+    "x-hopsworks-user",
+    "x-hopsworks-user-time",
+    "x-hopsworks-user-signature",
+    "x-forwarded-for",
+    "cookie",
+    "content-type",
+    "accept",
+}
+RETURNED = {"content-type", "set-cookie", "cache-control"}
+
+app = FastAPI()
+chat = httpx.AsyncClient(base_url=CHAT, timeout=httpx.Timeout(600, connect=10))
+
+
+@app.api_route("/chat/{path:path}", methods=["GET", "POST"])
+async def forward(path: str, request: Request) -> StreamingResponse:
+    headers = {k: v for k, v in request.headers.items() if k.lower() in FORWARDED}
+    upstream = chat.build_request(
+        request.method,
+        f"/{path}",
+        params=request.query_params,
+        headers=headers,
+        content=request.stream(),
+    )
+    reply = await chat.send(upstream, stream=True)
+    return StreamingResponse(
+        reply.aiter_raw(),
+        status_code=reply.status_code,
+        headers={k: v for k, v in reply.headers.items() if k.lower() in RETURNED},
+        background=BackgroundTask(reply.aclose),
+    )
+
+
+@app.get("/api/hello")
+def hello() -> dict:
+    return {"hello": "world"}
+
+
+app.mount("/", StaticFiles(directory="/tmp/chat-page", html=True), name="page")
+```
+
+`Resources/support_ui/web/main.jsx` is the page, React, with the chat inside whatever else it shows; `apiBase` is the path the app forwards, the same as the server's `--base-path`, so the page's requests and the links in the replies the server streams (images, files) both go through it:
+
+```jsx
+import { HopsworksChat, mount } from "@hopsworks/agent-chat/react";
+
+mount(<HopsworksChat apiBase="chat/" headerStart={<span>Support</span>} />);
+```
+
+`<HopsworksChat />` takes the same slots and parts here as in a customized chat app, and `useChat()` and the exported parts (`Header`, `Sidebar`, `Questions`, `AssistantMessage`, …) are there for a page built from them instead; the package's `README.md` and the `AGENTS.md` of a customized app describe them.
+The forward must stream, since replies are server-sent events: a forward that buffers them holds a reply until the turn ends, and a long turn then hits the gateway's timeout.
+Keep the forward to the headers above: the chat server refuses a name the signature does not cover, so a page cannot claim to be someone, but a forward of its own choosing could.
+Turning on such an app's public link makes the agent reachable by anyone holding the link, as it does for a chat app, and the app's limits are the chat server's (`CHAT_MAX_RUNS_PER_MINUTE` and the rest, as variables of the app).
+
+## Tracing
+
+With `tracing={"enabled": True}`, every turn is traced with OpenTelemetry: the turn, each model call with its tokens, and each tool call with its arguments and result.
+Hopsworks injects the `OTEL_EXPORTER_OTLP_*` settings into the deployment, so the agent needs no exporter configuration.
+The traces appear on the agent's page, and feedback, evaluation and monitoring read them.
+
+The first traced deployment in a project creates four feature groups in its feature store:
+
+- `otel_spans`, root spans and trace summary fields;
+- `otel_span_attributes`, span attributes as key-value pairs;
+- `otel_events`, span events;
+- `otel_event_attributes`, event attributes as key-value pairs.
+
+`otel_tracing_storage` chooses where traces are written:
+
+- `online`, the default, writes them to the online store, where the UI reads them;
+- `offline` writes them only offline, so the UI shows no trace summaries, but they can be read from the offline feature groups with the Python API;
+- `both` writes them to both, so they show in the UI and are kept cost-effectively for long-term retention, which is the recommended choice for a production agent.
+
+Set the model's prices so each trace carries its cost:
+
+```python
+agent = agents.deploy_agent(
+    "support_agent.py",
+    name="support_agent",
+    tracing={
+        "enabled": True,
+        "otel_tracing_storage": "both",
+        "input_token_price_per_million_tokens": 3.0,
+        "output_token_price_per_million_tokens": 15.0,
+    },
+)
+```
+
+Without prices every turn reports a cost of zero.
+
+### Finding a trace
+
+The **Traces** card on the agent's page lists the most recent traces, grouped by conversation, with their session, subject, status and execution time.
+To filter the list, pick the field to search in the dropdown beside the search box and type a value:
+
+- **Input or output** matches words said in the conversation, by the person or by the agent;
+- **Subject** matches the person a turn was for, exactly, so a partial value finds nothing;
+- **Session** matches a conversation id;
+- **Trace ID** matches one trace.
+
+Clicking a subject or a session in the list fills in the same search, so one click shows every conversation with that person, or every turn of that conversation.
+Changing the field clears the box, because a value typed for one field rarely means anything in another.
+
+Once a trace is open, the search box above its span tree filters the spans by any of their fields: name, type, status, messages, attributes and events.
+A span that matches keeps its ancestors in view, so it stays in context.
+
+The same search is available from Python:
+
+```python
+for trace in agent.traces(search="customer-7", search_field="subject", limit=20):
+    print(trace.trace_id, trace.session_id, trace.status_code)
+```
+
+`search_field` is `messages` (the default), `subject`, `session_id` or `trace_id`.
+
+## Next steps
+
+- [Agent Memory][agent-memory]: conversation history, a rolling summary, facts that outlive a conversation, and search over earlier conversations.
+- [Feedback][feedback-on-what-an-agent-answered]: verdicts on what the agent answered, from reviewers and from end users.
+- [Evaluation][evaluating-an-agent]: suites of tasks graded by checks, and the gate a release reads.
+- [Monitoring][monitoring-live-traffic]: grading the traffic the agent served, on a schedule.
+- [Failure Analysis][from-feedback-to-a-regression-suite]: turning failures into regression tasks.
 
 !!! api "API reference"
 
     - <code class="doc-symbol doc-symbol-method"></code> [`Project.get_agent_serving`][hopsworks_common.project.Project.get_agent_serving]
+    - <code class="doc-symbol doc-symbol-method"></code> [`ModelServing.deploy_agent`][hsml.model_serving.ModelServing.deploy_agent]
 
     <a class="hops-api-cta" href="../../../../python-api/hopsworks/">Browse the full Python API :material-arrow-right:</a>
 
@@ -30786,7 +30932,7 @@ Memory is one store with four tiers, each switched on independently.
 Two terms that look alike are not the same thing.
 *Semantic memory* is the facts an agent stores, while *semantic search* is one way episodic memory retrieves past turns.
 
-This guide assumes an agent that speaks the chat contract, see [The Chat Contract For Conversational Agents][the-chat-contract-for-conversational-agents].
+This guide assumes an agent that speaks the chat contract, see [the chat contract][the-chat-contract].
 
 ## Turning memory on
 
@@ -30844,7 +30990,7 @@ agent_app = AgentApp(
 ```
 
 **Code wins.** The deployment's policy is applied only when the agent passed no `memory=` of its own, and an explicit `memory=None` stays off however the deployment is configured.
-The manifest reports which it was under `capabilities.memory.source`, as `code` or `deployment`.
+The manifest reports which it was under `capabilities.custom.hopsworks.memory.source`, as `code` or `deployment`.
 
 Inside a deployment `ManagedMemoryService()` needs no arguments: the project database URL comes from the platform-injected environment and the table names are derived from the deployment id.
 Outside one, pass any SQLAlchemy URL and install the extra, `pip install 'hopsworks[agents-memory]'`.
@@ -31216,7 +31362,7 @@ A **suite** is the set of tasks plus those checks, published as a version so a r
 
 Running a suite produces a **run**, and one graded attempt at one task is a **trial**.
 
-This guide assumes a deployment that speaks the chat contract, see [The Chat Contract For Conversational Agents][the-chat-contract-for-conversational-agents].
+This guide assumes a deployment that speaks the chat contract, see [the chat contract][the-chat-contract].
 
 ## Writing a suite
 
@@ -32956,50 +33102,89 @@ This guide will cover how to configure an Hopsworks cluster to leverage an exter
 
 ## Configure the external Kafka cluster integration
 
-To enable the integration with an external Kafka cluster, you should set the `enable_bring_your_own_kafka` [configuration option](../admin/variables.md) to `true`.
-This can also be achieved in the cluster definition by setting the following attribute:
+To enable the integration with an external Kafka cluster, set the `enable_bring_your_own_kafka` [configuration option](../admin/variables.md) to `true`.
+In the Helm values used to deploy Hopsworks:
 
 ```yaml
 hopsworks:
-  enable_bring_your_own_kafka: "true"
+  variables:
+    enable_bring_your_own_kafka: "true"
 ```
 
 ### Online Feature Store service configuration
 
-In addition to the configuration changes above, you should also configure the Online Feature Store service (OnlineFS in short) to connect to the external Kafka cluster.
-This can be achieved by provisioning the necessary credentials for OnlineFS to subscribe and consume messages from Kafka topics used by the Hopsworks feature store.
+The Online Feature Store service (OnlineFS in short) consumes the feature store topics and writes them to the online feature store, so it needs to connect to the external Kafka cluster too.
+Enter its connection in `Cluster Settings` → `OnlineFS` as Kafka client properties, with the brokers, the security protocol and the credentials, as described in [OnlineFS configuration][onlinefs-kafka-connection].
+Enter the same Kafka cluster that the `kafka_connector` data sources of the projects use (see [Data Source configuration](#data-source-configuration)), because Hopsworks creates the topics there and the feature store clients write to it.
+OnlineFS consumes from that one cluster only, so the online feature groups of a project without a `kafka_connector` data source, whose topics are on the embedded cluster, do not reach the online feature store.
 
-OnlineFs can be configured to use these credentials by adding the following configurations to the cluster definition used to deploy Hopsworks:
+Pointing OnlineFS at another Kafka cluster moves neither topics nor data.
+Records left on the previous cluster are not ingested, and on the new cluster OnlineFS starts from the earliest records it retains, as described in [Consumer offsets][onlinefs-offsets].
+A cluster that configured OnlineFS through the `onlinefs` Helm values keeps that configuration until a connection is saved in Cluster Settings.
+Saving the same brokers there counts as a new cluster for the offsets, so OnlineFS reads the retained records again.
+
+The principal of the connection needs Describe and Read on the topics OnlineFS consumes and on its consumer groups, and Write on the notification topics, as listed in [Permissions on the Kafka cluster][onlinefs-kafka-permissions].
+
+OnlineFS subscribes to the topics matching `.*_onlinefs` by default.
+To consume project topics that do not end in `_onlinefs`, widen the pattern in the [subscription][onlinefs-subscription], for example to `.*_onlinefs|my_project_topic`.
+A topic list does not include the topics Hopsworks creates later, so their data would never reach the online feature store.
+
+## Topics on the external Kafka cluster
+
+Hopsworks creates and deletes the topics the feature store needs on the external cluster, as it does on its embedded cluster.
+It connects with the `kafka_connector` data source of each project (see [Data Source configuration](#data-source-configuration)).
+The Hopsworks pods call the brokers of that data source for every topic they create or look up, so the brokers must be reachable from the Hopsworks pods with its settings.
+
+- Creating an online or stream feature group, changing a feature group's topic or notification topic, setting the project topic, or creating a topic through the Kafka topic API creates the topic when it does not exist yet.
+- A stream feature group that is not online-enabled writes to a topic named after the project, with no suffix, unless the project or the feature group names a topic, so take that name into account when granting permissions by topic prefix.
+- A topic that already exists is used as it is, and Hopsworks never deletes it.
+- A topic Hopsworks created is deleted with its feature group or project, or when its feature group moves to another topic or notification topic, unless another project used the same topic name when it was created, in which case it is left in place.
+  A feature group's topic also stays while another feature group still writes to it or sends its notifications to it.
+- A topic Hopsworks created belongs to its project, so other projects cannot use it as their online or notification topic, because deleting that project would delete it.
+  Topics Hopsworks did not create can be shared between projects.
+- Topics and schemas are changed only through a project's own feature store: through a feature store shared from another project, the change is refused, because it would be made in that project and on its cluster.
+- A project without a `kafka_connector` data source has its topics created on the embedded cluster, and Hopsworks deletes them there later, also after the data source is added.
+  Create the data source before the project's first feature group so that its topics are created on the external cluster.
+
+!!! warning "Topics are deleted by name"
+    When Hopsworks deletes a topic it created on an external cluster, it deletes it on the cluster the project's `kafka_connector` points at then, which may differ from the cluster it was created on.
+    Pointing a `kafka_connector` at another cluster while the project still has topics Hopsworks created there makes Hopsworks delete the topics of the same names on the new cluster, so delete those topics, or the project, first.
+
+The principal of the `kafka_connector` data source needs the following permissions on the topics of its project:
+
+| Permission | Needed for |
+| --- | --- |
+| Describe | Checking whether a topic exists. Producing to a topic needs it too. |
+| Write | Producing to the topics. The feature store clients take their producer configuration from this data source, so without it inserts fail with an authorization error. |
+| Read | Reading the topics. The offline materialization job reads the ingested rows from the topics with this data source. |
+| Read on the consumer groups starting with `spark-kafka-relation-` | The offline materialization job reads the topics with Spark, which joins consumer groups of that prefix. |
+| Create | Creating topics that do not exist yet. Without it, the operations that create a topic fail with the broker's reason. |
+| Delete | Deleting the topics Hopsworks created. Without it, a topic stays on the cluster and in the project's topic list. |
+
+Hopsworks records the topics it creates by name only, so the name of a topic it creates must be unique across the Hopsworks cluster, even when projects connect to different external clusters.
+
+The project topic and the online and stream feature group topics get `onlinefs_service_thread_number` partitions, by default 10, and `kafka_num_replicas` replicas, by default 1.
+Topics created through the Kafka topic API get the partitions and replicas they ask for.
+Where `min.insync.replicas` is above a topic's replicas, producers that write with `acks=all` fail with `NotEnoughReplicas`, so set `kafka_num_replicas` to the replication factor of the external cluster:
 
 ```yaml
-  onlinefs:
-    config_dir: "/home/ubuntu/cluster-definitions/byok"
-    kafka_consumers:
-      topic_list: "comma separated list of kafka topics to subscribe to"
+hopsworks:
+  variables:
+    kafka_num_replicas: "3"
 ```
 
-In particular, the `onlinefs/config_dir` should contain the credentials necessary for the Kafka consumers to authenticate.
-Additionally the directory should contain a file name `onlinefs-kafka.properties` with the Kafka consumer configuration.
-The following is an example of the `onlinefs-kafka.properties` file:
+The variable applies to every project, also to a project without a `kafka_connector` data source, whose topics are created on the embedded cluster, which refuses more replicas than it has brokers.
 
-```properties
-bootstrap.servers=cluster_identifier.us-east-2.aws.confluent.cloud:9092
-security.protocol=SASL_SSL
-sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="username" password="password";
-sasl.mechanism=PLAIN
-```
+!!! note "No inference logging to an external Kafka"
+    The inference logger of model deployments can only reach the embedded Kafka cluster.
+    With an external Kafka cluster, a deployment created with inference logging gets no topic, and selecting an existing topic for it is refused.
 
-!!! note "Hopsworks will not provision topics"
-    Please note that when using an external Kafka cluster, Hopsworks will not provision the topics for the different projects.
-    Users are responsible for provisioning the necessary topics and configure the projects accordingly (see next section).
-    Users should also specify the list of topics OnlineFS should subscribe to by providing the `onlinefs/kafka_consumers/topic_list` option in the cluster definition.
+## Project configuration
 
-### Project configuration
+### Topic configuration
 
-#### Topic configuration
-
-As mentioned above, when configuring Hopsworks to use an external Kafka cluster, Hopsworks will not provision the topics for the different projects.
-Instead, when creating a project, users will be asked to provide the topic name to use for the feature store operations.
+When creating a project, users can provide the topic name to use for the feature store operations.
+Hopsworks creates the topic on the external cluster with the first feature group that writes to it, or when the topic is changed later, if it does not exist yet.
 The topic can be changed later from `Project Settings` → `Kafka`, and individual feature groups can override it, as described in the [ingestion topic][feature-group-ingestion-topic] guide.
 
 <p align="center">
@@ -33009,11 +33194,14 @@ The topic can be changed later from `Project Settings` → `Kafka`, and individu
   </figure>
 </p>
 
-#### Data Source configuration
+### Data Source configuration
 
-Users should create a [Kafka Data Source](../../user_guides/fs/data_source/creation/kafka.md) named `kafka_connector` which is going to be used by the feature store clients to configure the necessary Kafka producers to send data.
+Users should create a [Kafka Data Source](../../user_guides/fs/data_source/creation/kafka.md) named `kafka_connector`.
+Hopsworks uses it to create and delete the project's topics, and the feature store clients use it to configure the Kafka producers that send data.
 The configuration is done for each project to ensure its members have the necessary authentication/authorization.
 If the data source is not found in the project, default values referring to Hopsworks managed Kafka will be used.
+
+Producers and consumers of your own get the same configuration from the data source, as described in the [Data Source usage guide](../../user_guides/fs/data_source/usage.md#streaming-based-connector).
 
 ================================================================================
 # Cluster Administration
@@ -35542,6 +35730,198 @@ Under an ArgoCD that runs no pre-delete hooks, as described in [Under ArgoCD][un
 There, delete the Standard-mode deployments, or the `keda.sh` objects, before you delete the Application.
 
 ================================================================================
+# Envoy Gateway
+Source: https://docs.hopsworks.ai/latest/setup_installation/admin/envoy_gateway/
+
+# Envoy Gateway { #envoy-gateway }
+
+From 5.3, Hopsworks can route Standard-mode model deployments through the Kubernetes Gateway API, on Envoy Gateway.
+KServe builds its Standard mode and its generative AI features (`LLMInferenceService`, llm-d, the agent router) on the Gateway API, and this is the routing they build on.
+
+Nothing changes for the clients of your deployments.
+Istio stays the front door, with the same endpoint, ports and URLs, and forwards Standard-mode traffic to Envoy Gateway inside the cluster.
+Knative-mode deployments keep running through Istio as before.
+
+--8<-- "setup_installation/admin/envoy_gateway/traffic.html"
+
+!!! info "Off by default"
+
+    An upgrade to 5.3 that does not turn the feature on routes nothing differently.
+    API keys are checked by `model-serving-authenticator` on both paths, so access rules stay the same.
+
+## Turn it on { #envoy-gateway-enable }
+
+Two values in `global._hopsworks.envoyGateway` control the feature:
+
+- `enabled` installs Envoy Gateway and its Gateway.
+- `kserveStandardMode` moves the Standard-mode deployments to it.
+  It is `true` by default, so `enabled` alone does both; set it to `false` to install Envoy Gateway without moving any traffic.
+
+=== "New installation"
+
+    Set `enabled`, and both steps happen in one install:
+
+    ```yaml
+    global:
+      _hopsworks:
+        envoyGateway:
+          enabled: true
+    ```
+
+=== "Cluster with running deployments"
+
+    Turn it on in two upgrades, so that you can check the Gateway before any deployment moves:
+
+    ```yaml
+    global:
+      _hopsworks:
+        envoyGateway:
+          enabled: true
+          kserveStandardMode: false # set to true in the second upgrade
+    ```
+
+    Follow [Envoy Gateway][upgrade-envoy-gateway] in the upgrade guide, which lists the checks before, between and after the two upgrades.
+    Each deployment moves once its new routes are accepted, without a restart and without failed requests.
+
+All values are listed in [Envoy Gateway values][helm-values-hw-envoy-gateway], and the Gateway's own settings under `kserve.envoyGateway` in [KServe values][helm-values-kserve].
+
+## What gets installed { #envoy-gateway-components }
+
+- The Envoy Gateway 1.9 controller, in the Hopsworks namespace (the `hw-envoy-gateway` subchart).
+- The Gateway `kserve-ingress-gateway` and the Envoy proxies behind it, with a policy that checks every request's API key.
+- The CustomResourceDefinitions (CRDs) of Envoy Gateway and of the Gateway API, as described in [CustomResourceDefinitions][envoy-gateway-crds].
+
+The KServe controller restarts on the first 5.3 upgrade, and again on any upgrade that turns the routing of Standard-mode deployments through Envoy Gateway on or off.
+The deployments themselves are never restarted.
+
+## Images { #envoy-gateway-images }
+
+| Image | Used for |
+| ----- | -------- |
+| `docker.hops.works/envoyproxy/gateway` | The controller, the certificate setup and a sidecar of each proxy |
+| `docker.hops.works/envoyproxy/envoy` | The Envoy proxies |
+| `docker.hops.works/hopsworks/envoy-gateway-crds` | Installing the CRDs |
+
+On an airgapped cluster, mirror the three images and point the chart at your registry, as the chart's `values.airgap.yaml` shows:
+
+```yaml
+hw-envoy-gateway:
+  controller:
+    image:
+      registry: <your registry>
+  envoyProxy:
+    image:
+      registry: <your registry>
+  crdImage:
+    registry: <your registry>/hopsworks
+```
+
+## CustomResourceDefinitions { #envoy-gateway-crds }
+
+The chart installs the CRDs it needs during each install and upgrade.
+The Gateway API CRDs are shared by the whole cluster, so the chart treats them carefully:
+
+- It installs them when the cluster has none, and updates them only when it installed them itself.
+- It leaves a newer or experimental set installed by someone else as it is.
+- It stops the install or upgrade when someone else installed an older set, because only that owner can upgrade it.
+
+To see which Gateway API CRDs a cluster has:
+
+```bash
+kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.annotations}'
+```
+
+!!! tip "OpenShift and GKE"
+
+    On OpenShift 4.19 and later, and on GKE, the platform provides the Gateway API CRDs.
+    Set `hw-envoy-gateway.gatewayApiCrds.enabled: false` so the chart uses them; `values.openshift.yaml` already does.
+    On GKE Standard, enable the Gateway API on the cluster first, because GKE installs the CRDs only then (Autopilot has it on).
+    The chart then only checks that they exist, not their version, so make sure the platform's Gateway API version is one Envoy Gateway 1.9 supports.
+    This setup is verified on OKD 4.21.
+
+## Cluster requirements { #envoy-gateway-requirements }
+
+- **Permissions.**
+  The chart grants the Hopsworks backend what it needs.
+  If you install with `rbac.useExistingRole`, add the permissions below to your role.
+- **OpenShift.**
+  The Envoy Gateway pods run with the user and group ids the platform assigns, which `values.openshift.yaml` sets up.
+- **Isolation.**
+  Only the namespaces of your Hopsworks installation can attach routes to its Gateway, and each installation's controller manages only its own Gateway.
+  Hopsworks labels those namespaces itself, so there is nothing to configure.
+  The Envoy Gateway CRDs are shared by the whole cluster, though, and the chart updates them to its version, so another Envoy Gateway on the same cluster must work with Envoy Gateway 1.9's CRDs.
+
+??? note "Permissions for `rbac.useExistingRole`"
+
+    Add to the existing backend role:
+
+    | API group | Resources | Verbs |
+    | --------- | --------- | ----- |
+    | `gateway.networking.k8s.io` | `httproutes`, `referencegrants` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+    | `gateway.networking.k8s.io` | `gateways` | `get`, `list`, `watch` |
+    | `gateway.envoyproxy.io` | `securitypolicies` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+    | `""` | `namespaces` | `get`, `patch` |
+    | `discovery.k8s.io` | `endpointslices` | `get`, `list` |
+
+    The last two rows are usually in place already, because Hopsworks needs them for other features.
+    Add the Gateway rows before you turn the feature on, and keep them until it is fully turned off: Hopsworks needs them to move the deployments back to Istio.
+
+??? note "Expose the Gateway directly"
+
+    By default the Gateway is reachable only inside the cluster, through Istio.
+    To reach it directly as well, set `kserve.envoyGateway.service.type` to `NodePort`, with ports under `kserve.envoyGateway.service.nodePorts` that differ from Istio's, or to `LoadBalancer`.
+    This needs `model-serving-authenticator` 5.3 or later, and is not supported yet on AWS with unmanaged load balancers.
+
+    On the Gateway itself, a path must name the project exactly as its namespace or as its name, and the deployment exactly as its name.
+    For project `My_Proj`, `/v1/my-proj/mstd/...` and `/v1/My_Proj/mstd/...` work, while `/v1/MY_PROJ/mstd/...` gets a 404.
+    Istio accepts any capitalization of the project and any separator, so this only matters for clients that call the Gateway directly.
+
+## Turn it off or uninstall { #envoy-gateway-uninstall }
+
+To turn the feature off, upgrade twice in the reverse order.
+
+1. Set `kserveStandardMode: false`, which moves the deployments back to Istio without restarting them.
+    Hopsworks keeps each deployment's Gateway routes until its Istio route has been in place for 30 seconds.
+2. Wait until Hopsworks has moved every deployment back, which is when no Gateway route of Hopsworks is left:
+
+    ```bash
+    kubectl get httproutes.gateway.networking.k8s.io -n <namespace> -l serving.hops.works/gateway-route
+    ```
+
+3. Set `enabled: false`, which removes Envoy Gateway.
+
+!!! warning "Use `helm upgrade`, not `helm rollback`"
+
+    The Gateway objects are created and removed by install and upgrade hooks, which `helm rollback` does not run, so a rollback would leave them and the Envoy proxies behind.
+    If that happened, upgrade with `enabled: true` and `kserveStandardMode: false`, which brings the Envoy Gateway controller back, and then turn the feature off as above, so the controller can remove the proxies.
+
+Uninstalling Hopsworks with the feature on removes the Envoy proxies, the Gateway objects and the routes Hopsworks created.
+KServe's own routes live in the project namespaces and go when those are deleted.
+The CRDs stay, because other software on the cluster may use them.
+
+!!! warning "`cleanupOnUninstall.deleteCrds` deletes the Envoy Gateway CRDs"
+
+    With `hw-envoy-gateway.cleanupOnUninstall.deleteCrds: true`, uninstalling deletes the Envoy Gateway CRDs, and the Gateway API CRDs only if the chart installed them; Gateway API CRDs from the platform or another tool stay.
+    Deleting a CRD deletes every object of its kind on the cluster, so set it only when nothing else uses those CRDs: no other Envoy Gateway, and no other software that uses the Gateway API, such as another ingress controller or a service mesh.
+
+??? note "What stays after turning the feature off"
+
+    `enabled: false` leaves the GatewayClass `<release>-envoy-gateway`, the CRDs and the certificate Secrets `envoy-gateway`, `envoy`, `envoy-rate-limit` and `envoy-oidc-hmac`.
+    They do nothing on their own, and are reused if you turn the feature on again.
+    Once the feature is off, uninstalling Hopsworks leaves them too.
+
+    To remove them, delete the CRDs only if nothing else on the cluster uses them, and the Gateway API ones only if the chart installed them, because deleting a CRD deletes every object of its kind:
+
+    ```bash
+    kubectl delete gatewayclass <release>-envoy-gateway
+    kubectl delete secret -n <namespace> envoy-gateway envoy envoy-rate-limit envoy-oidc-hmac
+    kubectl get crd -o name | grep 'gateway.envoyproxy.io' | xargs kubectl delete
+    # The Gateway API CRDs, only if this prints envoy-gateway-crd-install:
+    kubectl get crd gateways.gateway.networking.k8s.io -o jsonpath='{.metadata.managedFields[*].manager}'
+    kubectl get crd -o name | grep 'gateway.networking.k8s.io' | xargs kubectl delete
+    ```
+
+================================================================================
 # Kafka Quotas
 Source: https://docs.hopsworks.ai/latest/setup_installation/admin/kafka_quotas/
 
@@ -35705,6 +36085,359 @@ kafka-configs.sh --bootstrap-server <broker>:9091 --command-config <cfg> \
 The chart does not remove it for you, because an operator may have set client-ID quotas deliberately.
 
 ================================================================================
+# OnlineFS Configuration
+Source: https://docs.hopsworks.ai/latest/setup_installation/admin/onlinefs/
+
+# OnlineFS Configuration { #onlinefs-configuration }
+
+## Introduction { #onlinefs-introduction }
+
+The Online Feature Store service (OnlineFS in short) consumes the feature store topics from Kafka, and writes the feature group rows to the online feature store (RonDB) and the embeddings to the vector database (OpenSearch).
+Administrators configure it in Hopsworks under `Cluster Settings` → `OnlineFS`.
+
+The `onlinefs` Helm chart keeps deploying OnlineFS.
+Replicas, resources, scheduling, autoscaling and the disruption budget stay in the [OnlineFS Helm values][helm-values-onlinefs].
+Hopsworks keeps the settings in its database and changes only one annotation on the pod template of the OnlineFS Deployment, which the chart does not render, so a `helm upgrade` undoes neither and ArgoCD reports no drift.
+
+Hopsworks stores four groups of settings:
+
+- The [Kafka connection][onlinefs-kafka-connection].
+- The [topic subscription][onlinefs-subscription].
+- The [Kafka client properties][onlinefs-kafka-client-properties] of each Kafka client of OnlineFS.
+- The [service settings][onlinefs-service-settings].
+
+At startup, OnlineFS reads its Helm configuration, then fetches the saved settings from Hopsworks and applies them over it.
+A saved setting wins over the Helm values and over the environment variables the chart sets.
+A setting that was never saved keeps its Helm value, and with nothing saved OnlineFS runs with its Helm configuration.
+Hopsworks applies a change by [restarting the OnlineFS pods][onlinefs-applying-changes].
+
+Users who are not administrators see the [status][onlinefs-status] read-only in their project settings, without the revisions and the restart error.
+
+## Kafka connection { #onlinefs-kafka-connection }
+
+The connection is a set of Kafka client properties.
+Left empty, which is the default, OnlineFS connects as its Helm configuration says: to the Kafka cluster bundled with Hopsworks, unless `onlinefs.dependencies.kafka` points it elsewhere.
+
+A connection that is set must contain `bootstrap.servers`, and it replaces the Helm connection as a group.
+OnlineFS removes the connection keys from the Helm configuration of each of its Kafka clients and uses the entered ones in their place.
+The connection keys are `bootstrap.servers`, `bootstrap.controllers`, `security.protocol`, `security.providers`, and every key starting with `ssl.` or `sasl.`.
+None of the TLS settings of the chart carry over: the truststore and keystore of the Hopsworks certificates, their passwords, and the empty `ssl.endpoint.identification.algorithm`, which turns off host name verification.
+Add the ones the cluster needs to the connection.
+
+The connection applies to every Kafka client of OnlineFS: the consumer that writes to RonDB, the consumer that writes to the vector database, the producer of feature group notifications, and the admin client that reports the consumer group metrics.
+Because they all follow one connection, the [client properties][onlinefs-kafka-client-properties] of a single client cannot contain connection keys.
+
+A connection to a cluster with `SASL_SSL` and SCRAM:
+
+```properties
+bootstrap.servers=b-1.kafka.example.com:9096,b-2.kafka.example.com:9096
+security.protocol=SASL_SSL
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username="onlinefs" password="<password>";
+```
+
+<figure>
+  <img src="../../../assets/images/admin/onlinefs/kafka-connection.png" alt="The Kafka connection editor with a saved SCRAM connection whose sasl.jaas.config value is hidden" />
+  <figcaption>A saved SCRAM connection, with its secret hidden</figcaption>
+</figure>
+
+Without truststore settings, OnlineFS accepts broker certificates signed by a certificate authority in the default truststore of its JVM.
+
+With an [external Kafka cluster][external-kafka-cluster], enter the cluster that the `kafka_connector` data sources of the projects use.
+
+### Certificates { #onlinefs-kafka-certificates }
+
+Certificates and keys go into the connection either inline in PEM form, or as paths to files inside the OnlineFS pod.
+Hopsworks stores the connection as properties only, so a truststore or keystore file has to exist in the pod already.
+
+In PEM form:
+
+| Key | Value |
+| --- | --- |
+| `ssl.truststore.type` | `PEM` |
+| `ssl.truststore.certificates` | The certificates of the certificate authorities that signed the broker certificates. |
+| `ssl.keystore.type` | `PEM`, for a cluster that authenticates clients by certificate. |
+| `ssl.keystore.certificate.chain` | The client certificate chain. |
+| `ssl.keystore.key` | The private key of the client, in PKCS#8 form. |
+| `ssl.key.password` | The password of the private key, when it is encrypted. |
+
+A PEM value keeps its line breaks, from the `-----BEGIN` line to the `-----END` line.
+Line breaks are accepted only in the values of keys ending in `.certificates`, `.certificate.chain` or `.key`, which can be up to 5000 characters long.
+Every other value, in any of the settings on this page, is a single line of at most 1000 characters.
+Outside the Kafka connection, keys and values can use only Latin-1 characters, each of the four property maps can hold at most 5000 characters in total, and the topic pattern and the comma-separated topic list are each at most 1000 characters.
+The Kafka connection as a whole can hold up to 64 KiB, enough for a CA certificate, a client certificate and a key given inline.
+
+As files, `ssl.truststore.location` and `ssl.keystore.location` point at a truststore and a keystore inside the OnlineFS pod, with their passwords in `ssl.truststore.password`, `ssl.keystore.password` and `ssl.key.password`.
+The chart mounts the Hopsworks certificates under `/certs`.
+
+### Credentials { #onlinefs-kafka-credentials }
+
+Hopsworks stores the connection encrypted in its database with the master encryption password, and re-encrypts it when that password changes.
+A first connection saved while a master encryption password change is running can stay encrypted with the old password.
+An OnlineFS pod that starts then cannot fetch its settings and does not consume, and the [status][onlinefs-status] shows `CONNECTION_UNREADABLE`.
+
+<figure>
+  <img src="../../../assets/images/admin/onlinefs/connection-unreadable.png" alt="The OnlineFS status card with the settings state Connection unreadable and an explanation of the recovery" />
+  <figcaption>The status of a connection that does not decrypt</figcaption>
+</figure>
+
+The settings cannot be read either, so the page offers `Reset to Helm configuration` in place of the form.
+The reset clears the connection, and it can be entered again.
+
+<figure>
+  <img src="../../../assets/images/admin/onlinefs/settings-unreadable.png" alt="The OnlineFS settings page reporting that the settings could not be read, with the Reset to Helm configuration button" />
+  <figcaption>The reset offered when the settings cannot be read</figcaption>
+</figure>
+
+Hopsworks shows the value of every key whose name contains `password`, `jaas` or `secret`, or ends in `.key`, as `********`.
+Saving with `********` left in place keeps the stored value, so a credential has to be entered again only to change it.
+Only OnlineFS receives the values unmasked, and neither Hopsworks nor OnlineFS logs them.
+
+## Subscription { #onlinefs-subscription }
+
+OnlineFS subscribes to its topics either by a pattern or by a list:
+
+- A pattern is a Java regular expression, by default `.*_onlinefs`.
+  OnlineFS consumes every topic whose name it matches, including topics created later.
+- A topic list names the topics, separated by commas.
+  Hopsworks trims the names and drops empty entries and duplicates.
+  A name can contain letters, digits, `.`, `_` and `-`, and be up to 249 characters long.
+
+A topic created later is not consumed until it is added to the list, so its data does not reach the online feature store until then.
+Hopsworks creates the topics of new feature groups and projects, so subscribe by pattern unless every topic is known in advance.
+To consume project topics that do not end in `_onlinefs`, widen the pattern, for example to `.*_onlinefs|fraud_transactions`.
+The [ingestion topic][feature-group-ingestion-topic] guide describes which topic a feature group writes to.
+
+Left empty, OnlineFS keeps the subscription of its Helm values, under `onlinefs.configmapOverrides.onlinefssite.kafkaConsumer`.
+A saved subscription replaces both Helm values, `topicPattern` and `topicList`, because a non-empty topic list in the Helm values would otherwise take precedence over a saved pattern.
+
+## Kafka client properties { #onlinefs-kafka-client-properties }
+
+Three sets of Kafka client properties tune one client each:
+
+- The consumer properties apply to the consumer that writes feature group rows to RonDB, in the consumer group `onlinefs_rondb`.
+- The VectorDB consumer properties apply to the consumer that writes embeddings to the vector database, in the consumer group `onlinefs_vectordb`.
+- The producer properties apply to the producer of feature group notifications.
+
+Each set is applied last, over the properties the chart sets for that client and over the connection.
+For example, `max.poll.records=500` in the consumer properties replaces the 1000 the chart sets.
+The properties the chart sets are in `onlinefs-kafka.properties`, `onlinefs-kafka-vector-db.properties` and `producer.properties` of the OnlineFS ConfigMap.
+
+A set that contains a connection key is refused when saving, because every client follows the one [Kafka connection][onlinefs-kafka-connection].
+
+## Service settings { #onlinefs-service-settings }
+
+Service settings are keys of `onlinefs-site.xml`, written as `section.key`.
+Only the keys below are accepted, with a value of the listed type, and every integer must be 0 or more.
+`service.threadNumber` and `service.reportingQueueSizePerThread` must be at least `1`, because OnlineFS sizes its reporting thread pool and queues from them and cannot start with `0`.
+`rondb.batchSize` and `opensearch.batchSize` must be at least `1`, because OnlineFS splits the rows it writes into batches of that size.
+`service.ronDbThreadNumber` and `service.vectorDbThreadNumber` cannot both be `0`, because OnlineFS would then consume nothing.
+The default is the value the chart sets, or the default of OnlineFS where the chart sets none.
+
+**`service`**
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `service.threadNumber` | integer | `10` | Maximum number of threads that report ingestion to Hopsworks and send feature group notifications. |
+| `service.ronDbThreadNumber` | integer | `10` | Number of Kafka consumer threads that write to RonDB. |
+| `service.vectorDbThreadNumber` | integer | `10`, or `0` without VectorDB ingestion | Number of Kafka consumer threads that write embeddings to the vector database. Set it above 0 only when `onlinefs.deployment.vectordb.enabled` is true, because only then does the chart provide the OpenSearch credentials. |
+| `service.reportingQueueSizePerThread` | integer | `100` | Queue size per reporting and notification thread. |
+| `service.getSessionRetrySleepMs` | integer | `100` | Milliseconds between attempts to get a RonDB session. |
+| `service.pauseRetrySleepMs` | integer | `5000` | Milliseconds between attempts while ingestion is paused on a failure that looks transient, such as a RonDB or Hopsworks upgrade. |
+| `service.maxPauseMs` | integer | `0` | Milliseconds after which OnlineFS gives up on a batch paused on such a failure, and drops its rows. `0` waits until the failure resolves. |
+| `service.maxBlacklistSize` | integer | `100` | Maximum number of entries in the lists of feature groups and projects whose records OnlineFS skips. |
+| `service.maxFeatureGroupCacheSize` | integer | `1000` | Maximum number of entries in the feature group metadata cache. |
+| `service.maxFeatureStoreCacheSize` | integer | `1000` | Maximum number of entries in the feature store metadata cache. |
+| `service.maxFeatureViewCacheSize` | integer | `1000` | Maximum number of entries in the feature view metadata cache. |
+| `service.featureGroupCacheExpire` | integer | `30` | Minutes after which a feature group cache entry expires. |
+| `service.featureStoreCacheExpire` | integer | `30` | Minutes after which a feature store cache entry expires. |
+| `service.featureViewCacheExpire` | integer | `10` | Minutes after which a feature view cache entry expires. |
+| `service.verifyFeatureGroupTopic` | boolean | `true` | Drop records that did not arrive on the online topic of the feature group their headers name. See [OnlineFS drops records that arrive on another topic][upgrade-onlinefs-topics] before turning it off. |
+| `service.region` | string | none | Region written into feature group notifications. |
+
+**`rondb`**
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `rondb.batchSize` | integer | `300` | Maximum number of rows per RonDB commit. |
+| `rondb.maxRetries` | integer | `3` | Retries of a failed RonDB commit. |
+| `rondb.missingTableRetries` | integer | `5` | Lookups of a table that RonDB reports as missing, before OnlineFS treats its feature group as deleted. |
+| `rondb.maxCachedSessions` | integer | `20` | Maximum number of ClusterJ sessions cached per connection. |
+| `rondb.maxCachedInstances` | integer | `1024` | Maximum number of ClusterJ instances cached. |
+| `rondb.reconnectTimeout` | integer | `5` | ClusterJ reconnect timeout, in seconds. |
+| `rondb.maxTransactions` | integer | `1024` | Maximum number of concurrent ClusterJ transactions. |
+| `rondb.useSessionCache` | boolean | `false` | Return ClusterJ sessions to a cache instead of closing them. |
+| `rondb.useDynamicObjectCache` | boolean | `false` | Return ClusterJ objects to a cache instead of releasing them. |
+
+**`kafkaConsumer`**
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `kafkaConsumer.pollTimeoutMs` | integer | `1000` | Kafka consumer poll timeout, in milliseconds. |
+
+**`opensearch`**
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `opensearch.batchSize` | integer | `1000` | Maximum number of embeddings per vector database commit. |
+| `opensearch.maxRetries` | integer | `10` | Retries of a failed vector database commit. |
+
+Every other key is refused:
+
+- `kafkaConsumer.topicPattern` and `kafkaConsumer.topicList` are set through the [subscription][onlinefs-subscription].
+- `hopsworks.*`, `kafka.propertiesFile*`, `metrics.port`, `rondb.connectionString`, `opensearch.host`, `opensearch.userName` and `opensearch.password` come from the deployment: the endpoints, the credentials, the files the chart mounts, and the port its probes check.
+- `rondb.poolSize` stays in the Helm values, because every pooled connection of every pod takes a RonDB API slot from the pool that the HopsFS NameNodes also use.
+
+## Applying changes { #onlinefs-applying-changes }
+
+`Save`, `Restart` and `Reset to Helm configuration` each restart OnlineFS:
+
+- `Save` stores the settings.
+- `Restart` leaves the settings as they are.
+- `Reset to Helm configuration` clears every saved setting, so OnlineFS returns to its Helm configuration.
+
+Hopsworks restarts OnlineFS with a rollout of its Deployment, as `kubectl rollout restart` does.
+It writes the revision of the saved settings into the `onlinefs.hopsworks.ai/settings-revision` annotation of the pod template, and Kubernetes replaces the pods.
+Each new pod fetches the settings when it starts.
+A change saved during a rollout is applied by a further rollout once that one ends.
+
+The rollout strategy of the Deployment decides the order in which pods are replaced:
+
+- With a single replica the chart sets no strategy, so Kubernetes starts the new pod first and stops the old one once the new one is ready.
+- With two or more replicas the chart stops a pod before it starts its replacement, so that a rollout completes on a node pool with no room for an extra pod.
+  The other pods keep consuming meanwhile.
+- `onlinefs.deployment.strategy` in the Helm values replaces both, for example with `maxSurge: 1` and `maxUnavailable: 0` to start every new pod first.
+  It applies to Helm upgrades as well.
+
+A new pod started first needs room on the node pool, and free RonDB API slots for its connections.
+Kubernetes counts a pod as ready once its metrics port answers, so an old pod can stop shortly before its replacement consumes.
+Kafka keeps the records while pods are replaced, and OnlineFS continues from its stored offsets.
+
+When Kubernetes reports that the rollout cannot progress, for example because a new pod cannot be scheduled or keeps crashing, the restart stops and the status shows the settings as `FAILED`, with the reason.
+Fix the cause and press `Restart`.
+
+## Status { #onlinefs-status }
+
+The status shows the state of the OnlineFS Deployment, its desired, ready, updated and available replicas, and whether the latest settings are applied.
+
+<figure>
+  <img src="../../../assets/images/admin/onlinefs/status.png" alt="The OnlineFS status card with the Deployment running, 2 of 2 replicas ready and the settings applied" />
+  <figcaption>The OnlineFS status, with the Restart action</figcaption>
+</figure>
+
+| State | Meaning |
+| --- | --- |
+| `RUNNING` | The Deployment runs its replicas and no rollout is in progress. |
+| `UPDATING` | A rollout is in progress. |
+| `STOPPED` | The Deployment has 0 replicas. |
+| `FAILED` | Kubernetes reports that the rollout cannot progress, with the reason. |
+| `NOT_FOUND` | No Deployment named by the `onlinefs_deployment_name` variable, by default `onlinefs-deployment`, exists in the namespace Hopsworks is installed in. |
+| `UNKNOWN` | Hopsworks does not run on Kubernetes. |
+
+| Settings state | Meaning |
+| --- | --- |
+| `NONE` | Nothing was ever saved, and OnlineFS runs with its Helm configuration. |
+| `PENDING` | Settings were saved or reset, or `Restart` was pressed, and the rollout has not completed yet. |
+| `FAILED` | The last restart stopped on an error, shown with the status. |
+| `NOT_FETCHED` | The pods were replaced, but none fetched the latest settings, because the OnlineFS image they run does not fetch settings from Hopsworks. |
+| `CONNECTION_UNREADABLE` | The saved Kafka connection does not decrypt with the current master encryption password, so an OnlineFS pod that starts cannot fetch its settings. It takes precedence over the other states. See [Credentials][onlinefs-kafka-credentials]. |
+| `APPLIED` | The pods were replaced and fetched the latest settings. |
+
+`APPLIED` says nothing about whether OnlineFS reaches the Kafka cluster.
+The OnlineFS logs and the OnlineFS dashboard show that.
+
+Administrators also see the revision of the saved settings, the revision the last completed restart applied, the revision OnlineFS fetched last, and the error of the last restart.
+
+## Consumer offsets { #onlinefs-offsets }
+
+OnlineFS stores its consumer offsets in the online feature store of each project, per consumer group, topic and partition.
+It keeps the offsets of a saved connection apart from those of the Helm connection, and starts new ones whenever the saved `bootstrap.servers` changes:
+
+- With the Helm connection, OnlineFS uses the offsets it has always used, so an upgraded cluster resumes where it was.
+- A saved connection whose `bootstrap.servers` differs from the previous one, or a connection saved where there was none, starts a new set of offsets.
+  OnlineFS then reads that cluster from the earliest records it retains, because the chart sets `auto.offset.reset=earliest`.
+  This also holds for a cluster OnlineFS used before.
+- Changing any other key of the connection, such as the credentials, keeps the offsets.
+- Resetting to the Helm configuration returns to the offsets of the Helm connection.
+
+Hopsworks tells Kafka clusters apart by `bootstrap.servers` alone.
+A new broker list for the same cluster, or moving a connection from the Helm values into Cluster Settings, also makes OnlineFS read the retained records again and write them to the online feature store again.
+Plan such a change for a time when that load is acceptable.
+A change of the Helm connection itself, in the Helm values, keeps the offsets of the Helm connection, as in earlier releases.
+
+## Startup { #onlinefs-startup }
+
+Each OnlineFS pod asks Hopsworks for the saved settings once at startup, before it consumes.
+Hopsworks answers only the OnlineFS service user, named by the `onlinefs_service_user_email` variable, by default `onlinefs@hopsworks.ai`, because the answer contains the Kafka credentials.
+
+- When Hopsworks answers, OnlineFS applies the saved settings, or runs with its Helm configuration when nothing is saved.
+- When Hopsworks is an older release without these settings, OnlineFS runs with its Helm configuration.
+- When Hopsworks cannot be reached, answers with a server error, or refuses the API key, OnlineFS logs the error and asks again, after 1 second at first and doubling up to 60 seconds.
+
+In the last case OnlineFS does not fall back to its Helm configuration, because that could make it consume from another Kafka cluster than the one saved, while waiting loses nothing: Kafka keeps the records.
+A pod that starts while Hopsworks is down therefore waits for Hopsworks, whether settings are saved or not.
+Running pods are not affected, since they ask only at startup.
+
+## Permissions on the Kafka cluster { #onlinefs-kafka-permissions }
+
+On a Kafka cluster with authorization, the principal of the connection needs:
+
+| Resource | Operations | Needed for |
+| --- | --- | --- |
+| The topics OnlineFS subscribes to | Describe, Read | Consuming the feature group rows. |
+| The consumer groups `onlinefs_rondb` and `onlinefs_vectordb` | Describe, Read | Joining the consumer groups and reporting their metrics. |
+| The notification topics of feature groups | Write | Sending feature group notifications. |
+
+A `group.id` in the consumer properties or the VectorDB consumer properties changes the name of the consumer group to grant.
+OnlineFS creates no topics.
+On an external Kafka cluster, Hopsworks creates them with the `kafka_connector` data source of each project, as described in [Topics on the external Kafka cluster][topics-on-the-external-kafka-cluster].
+
+## REST API { #onlinefs-rest-api }
+
+Administrators can manage the settings with the REST API, also with an API key of scope `ADMIN`:
+
+```text
+GET    /hopsworks-api/api/admin/onlinefs/config
+PUT    /hopsworks-api/api/admin/onlinefs/config
+DELETE /hopsworks-api/api/admin/onlinefs/config
+POST   /hopsworks-api/api/admin/onlinefs/restart
+GET    /hopsworks-api/api/admin/onlinefs/status
+```
+
+`PUT` saves the settings and `DELETE` resets them to the Helm configuration, and both return the resulting settings.
+`POST` on `restart` restarts OnlineFS with the settings unchanged and returns the status.
+All three restart OnlineFS as described in [Applying changes][onlinefs-applying-changes].
+
+```json
+{
+  "kafkaConnection": {
+    "bootstrap.servers": "b-1.kafka.example.com:9096",
+    "security.protocol": "SASL_SSL",
+    "sasl.mechanism": "SCRAM-SHA-512",
+    "sasl.jaas.config": "********"
+  },
+  "topicPattern": ".*_onlinefs",
+  "topicList": null,
+  "kafkaConsumerOverrides": {"max.poll.records": "500"},
+  "kafkaProducerOverrides": {},
+  "kafkaVectordbOverrides": {},
+  "siteOverrides": {"service.ronDbThreadNumber": "12"},
+  "revision": 7,
+  "updated": "2026-10-27T15:00:00.000Z"
+}
+```
+
+- A `PUT` replaces every setting, so send the whole configuration as a `GET` returns it.
+- An empty or absent `kafkaConnection` keeps the Helm connection.
+- At most one of `topicPattern` and `topicList` is set, and `topicList` is an array of topic names.
+  With both `null`, OnlineFS keeps the subscription of its Helm values.
+- A value of `********` keeps the stored value of that key.
+- `revision` and `updated` are read-only and ignored on `PUT`.
+
+Every logged-in user can read the status of OnlineFS with `GET /hopsworks-api/api/onlinefs/status`, also with an API key of scope `FEATURESTORE`.
+It returns the state, the replica counts, the message, the settings state, and whether any setting is saved, without the revisions and the restart error.
+
+================================================================================
 # Uninstalling Hopsworks
 Source: https://docs.hopsworks.ai/latest/setup_installation/admin/uninstall/
 
@@ -35826,7 +36559,7 @@ The commands assume Hopsworks is installed in the `hopsworks` namespace.
 | ------- | ---------- | ----------------- |
 | [5.0.x to 5.1.x][upgrade-50-to-51] | 1.3.x to 2.19.x | Kubernetes 1.34 or later before the upgrade, a first Helm 4 upgrade, and from 5.0.13 or earlier to 5.1.2 or later [the Trino query history][upgrade-trino-query-history]. |
 | [5.1.x to 5.2.x][upgrade-51-to-52] | 2.19.x to 3.8.0: upgrade to 5.2.1 or later | The index pass, Kafka moves to KRaft, KEDA, Kubernetes 1.37 only afterwards, Trino, and from 5.2.2 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
-| [5.2.x to 5.3.x][upgrade-52-to-53] | stays on 3.8.0 | ICEBERG feature groups in Trino, the Filebeat registry, the memory of the OTLP sidecar of agent deployments, from 5.2.0 [the subset shares in Trino][upgrade-trino-subset-shares] and the OpenSearch security configuration, and from 5.2.0 or 5.2.1 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
+| [5.2.x to 5.3.x][upgrade-52-to-53] | stays on 3.8.0 | ICEBERG feature groups in Trino, the Filebeat registry, the memory of the OTLP sidecar of agent deployments, [Envoy Gateway][upgrade-envoy-gateway] when turned on, with an external Kafka [the topics Hopsworks creates and deletes on it][upgrade-byok-topics], [notification topics and shared feature stores][upgrade-notification-topics], from 5.2.0 [the subset shares in Trino][upgrade-trino-subset-shares] and the OpenSearch security configuration, and from 5.2.0 or 5.2.1 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
 
 ## Before every upgrade { #upgrade-before-every-upgrade }
 
@@ -36066,6 +36799,123 @@ What changes for users and operators ([details](kueue_external.md#what-changes))
 - The Ray autoscaler and job-submitter sidecars count against quota (Kueue 0.19).
 - A workload without a priority class gets the WorkloadPriorityClass named `default`, when one exists (Kueue 0.20).
 
+### Bring your own Kafka: Hopsworks creates and deletes topics { #upgrade-byok-topics }
+
+From 5.3, with `enable_bring_your_own_kafka`, Hopsworks creates and deletes the topics it needs on the [external Kafka][external-kafka-cluster], as it does on the bundled one.
+It connects with each feature store's `kafka_connector`.
+Before, it created no topics there, so every topic had to exist before ingestion.
+
+- **The backend connects to the external brokers.**
+  The operations below make the Hopsworks pods call the brokers of the project's `kafka_connector`, also for a topic that already exists, so those brokers must be reachable from the Hopsworks pods with the connector's settings.
+  Otherwise the operations fail with `KAFKA_UNAVAILABLE` (190021) after 30 seconds, `TOPIC_FETCH_FAILED` (190023) when the broker refuses to describe the topic, or `KAFKA_GENERIC_ERROR` (190007) when the client cannot be set up.
+- **Topics that already exist are used as they are.**
+  Hopsworks describes a topic before creating it, and never deletes a topic it found already there.
+  Topics created before the upgrade keep working with the same `kafka_connector` credentials, which already need Describe on them to produce.
+- **Missing topics are created.**
+  Creating an online or stream feature group, changing a feature group's topic or notification topic, setting the project topic in `Project Settings` → `Kafka`, or creating a topic through the topic API creates the topic on the external cluster when it does not exist.
+  A stream feature group that is not online-enabled writes to a topic named after the project, with no suffix, unless the project or the feature group names one.
+  For that the `kafka_connector` principal needs Create on those topics, and Delete for Hopsworks to remove them again.
+  Without Create, these operations fail with `TOPIC_CREATION_FAILED` (190024) and the broker's reason; before 5.3 they succeeded and ingestion failed later on the missing topic.
+- **Hopsworks deletes only the topics it created**, with their feature group or project, or when a feature group moves to another topic, and only those no other project used when they were created.
+  A feature group's topic also stays while another feature group names it or while it is the project topic.
+  A topic Hopsworks created on the external cluster is deleted by name on the cluster the project's `kafka_connector` points at when it is deleted.
+  A delete that Kafka refuses keeps the topic in the project's topic list; one refused while deleting a project is logged by the backend with the topic's name and cluster.
+- **Topics recorded before the upgrade stay on the bundled Kafka.**
+  Before 5.3 Hopsworks created every topic it recorded on the bundled Kafka, also for projects that had no `kafka_connector` yet.
+  The upgrade adds the nullable column `project_topics.external_kafka` (migration V130, an online `ALTER`), and a row without it is deleted on the bundled Kafka, as before, never on the external cluster.
+  A project without a `kafka_connector` still creates its topics on the bundled Kafka, so create the connector before the project's first feature group.
+- **Partitions and replicas.**
+  The project topic and the online and stream feature group topics get `hopsworks.variables.onlinefs_service_thread_number` partitions (default 10) and `hopsworks.variables.kafka_num_replicas` replicas (default 1); topics created through the topic API get the partitions and replicas they ask for.
+  Where `min.insync.replicas` is above a topic's replicas, producers that write with `acks=all` fail with `NotEnoughReplicas`, so set `kafka_num_replicas` to the external cluster's replication factor.
+  The variable applies to every project: one without a `kafka_connector` creates its topics on the bundled Kafka, which refuses more replicas than it has brokers with `TOPIC_REPLICATION_ERROR` (190005).
+- **OnlineFS must subscribe by pattern.**
+  OnlineFS picks up new topics only through `onlinefs.configmapOverrides.onlinefssite.kafkaConsumer.topicPattern` (default `.*_onlinefs`).
+  A non-empty `topicList` in the same section replaces the pattern and does not include the topics Hopsworks creates.
+  A cluster set up with a topic list sets `topicList: ""`, and widens `topicPattern` until it also matches the project topics it consumes that do not end in `_onlinefs`.
+- **Model serving does not log to an external Kafka.**
+  The inference logger reaches only the bundled Kafka, so a deployment created with inference logging gets no topic, and selecting an existing topic for it is refused.
+
+### Notification topics and shared feature stores { #upgrade-notification-topics }
+
+- **A notification topic belongs to its project.**
+  A feature group's notification topic (Change Data Capture) is a topic of its project from 5.3, like its ingestion topic.
+  Hopsworks creates it when the feature group is created or moves to another notification topic, if it does not exist yet, and deletes it with the feature group, or on such a move, when Hopsworks created it and no other feature group uses it.
+  A feature group whose notification topic is another project's topic is refused with `TOPIC_IN_USE_BY_ANOTHER_PROJECT` (190026).
+  A notification topic set before the upgrade is left as it is until its feature group moves to another one.
+- **Kafka changes through a shared feature store are refused.**
+  Creating or deleting a topic or a schema, or setting a compatibility level, through a feature store shared from another project fails with `CHANGE_THROUGH_SHARED_FEATURE_STORE` (190027).
+  Before, the change was made in the project that shares the feature store, and with an external Kafka on that project's cluster.
+  Reading through a shared feature store is unchanged.
+
+### Envoy Gateway { #upgrade-envoy-gateway }
+
+New in 5.3 and off by default: [Envoy Gateway][envoy-gateway] routes Standard-mode model deployments through the Kubernetes Gateway API, with Istio still the front door.
+
+- **Nothing moves unless you turn it on.**
+  An upgrade that leaves `global._hopsworks.envoyGateway` alone routes every request as before.
+- **Two components restart during the upgrade.**
+  The KServe controller restarts, and the running deployments keep serving meanwhile.
+  From 5.3 it also restarts on any later upgrade that changes its ingress configuration, such as turning Envoy Gateway routing on or off.
+  `model-serving-authenticator` restarts with a new listener for the Gateway.
+  While its old pod is replaced, a few requests can get a 403, because the 5.2 pod stops without waiting for the new one; from 5.3 its restarts wait, so later ones lose no request.
+
+To turn it on in a cluster with running deployments, upgrade twice, so that the Gateway is up before any deployment moves.
+Clients keep their endpoint, Knative-mode deployments stay on Istio, and no deployment restarts.
+
+1. **Prepare.**
+    List the Standard-mode deployments, to check them at the end:
+
+    ```bash
+    kubectl get isvc -A -o json | jq -r '.items[] | select(.metadata.annotations["serving.kserve.io/deploymentMode"] == "Standard") | .metadata.namespace + "/" + .metadata.name'
+    ```
+
+    !!! warning "OpenShift 4.19 or later, and GKE"
+
+        Set `hw-envoy-gateway.gatewayApiCrds.enabled: false` before you turn the feature on.
+        The platform owns the Gateway API CRDs there, and the chart must use them rather than install its own, as described in [CustomResourceDefinitions][envoy-gateway-crds].
+        `values.openshift.yaml` already sets it.
+        On GKE Standard, enable the Gateway API on the cluster first: GKE installs the CRDs only then, and the upgrade fails without them.
+
+    With `rbac.useExistingRole`, add the permissions listed under [Cluster requirements][envoy-gateway-requirements] to the backend role.
+
+2. **Install Envoy Gateway** with `helm upgrade` and these values:
+
+    ```yaml
+    global:
+      _hopsworks:
+        envoyGateway:
+          enabled: true
+          kserveStandardMode: false
+    ```
+
+    Set `kserveStandardMode: false` explicitly: it defaults to `true`, which would also move the deployments in this upgrade.
+    The deployments keep their Istio routes, so no traffic moves yet.
+    The Gateway is ready when it reports `Programmed`:
+
+    ```bash
+    kubectl get gateways.gateway.networking.k8s.io -n <namespace> kserve-ingress-gateway
+    ```
+
+    Hopsworks checks the rest itself before it moves a deployment: the Gateway's policy, the routes and a request through Envoy.
+    You can stay at this step for as long as you need.
+
+3. **Move the deployments** with `helm upgrade` and `kserveStandardMode: true`.
+    The KServe controller restarts, and Hopsworks starts moving the Standard-mode deployments within a minute.
+    Each one moves once its new routes are accepted, and its Istio route keeps serving until then; a deployment still waiting is retried every minute.
+    A deployment that is not ready is picked up after it becomes ready, at the next full pass, every ten minutes.
+    The backend log reports each deployment it moves.
+
+4. **Check** against the list from step 1:
+    - No Istio Ingress is left for a ready Standard-mode deployment, neither KServe's nor, for a deployment that scales to zero, the idle one:
+
+        ```bash
+        kubectl get ingress -A -l serving.kserve.io/inferenceservice
+        kubectl get ingress -A -l serving.hops.works/keda-idle=true
+        ```
+
+    - Every Standard-mode deployment answers through the usual endpoint, with both URL shapes.
+    - The Knative-mode deployments are unchanged.
+
 ## Changes from 5.2.2 { #upgrade-changes-from-522 }
 
 These changes ship in 5.2.2 and 5.3.0.
@@ -36088,7 +36938,8 @@ A record that fails the check is dropped, logged by OnlineFS (`Record dropped, i
   Creating a project, changing its topic, creating an online feature group or changing its topic, or creating a Kafka topic fails with `TOPIC_IN_USE_BY_ANOTHER_PROJECT` (190026) when the topic is the online topic of another project, the topic of another project's feature group, or a topic another project owns.
   The upgrade leaves a project or feature group already configured that way as it is, and updates that keep its topic still succeed.
   A project whose own topic is taken that way cannot create online feature groups until it gets a topic of its own, while the project that created the topic, or whose default `<project>_onlinefs` topic it is, keeps using it.
-  With an external Kafka (`enable_bring_your_own_kafka`), where Hopsworks owns no topics and projects may share one, this is not enforced.
+  With an external Kafka (`enable_bring_your_own_kafka`), where Hopsworks owns no topics and projects may share one, 5.2.2 does not enforce this.
+  From 5.3 a topic on an external Kafka is refused only when another project owns it because Hopsworks created it for that project, as described in [Bring your own Kafka][upgrade-byok-topics].
 - **After the upgrade**, check that the topic mismatch panels stay at zero.
   A drop from a legitimate producer means one of the cases above: its insert never completes its online ingestion, and the project's `get_failures` does not list the dropped records.
 
@@ -40872,6 +41723,22 @@ _The values table is generated from the Hopsworks Helm chart during the document
 <!-- END GENERATED VALUES -->
 
 ================================================================================
+# hw-envoy-gateway
+Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hw-envoy-gateway/
+
+# Envoy Gateway values { #helm-values-hw-envoy-gateway }
+
+Values under `hw-envoy-gateway` configure the Envoy Gateway controller, the Gateway API front door of Standard-mode model deployments, and the hook that applies its CustomResourceDefinitions.
+The subchart is installed when `global._hopsworks.envoyGateway.enabled` is true (off by default); the Gateway itself, its policies and its Service are configured under `kserve.envoyGateway` in [KServe values][helm-values-kserve].
+See [Envoy Gateway][envoy-gateway] for what the chart installs and what the cluster needs.
+
+<!-- BEGIN GENERATED VALUES -->
+
+_The values table is generated from the Hopsworks Helm chart during the documentation build._
+
+<!-- END GENERATED VALUES -->
+
+================================================================================
 # hw-keda
 Source: https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/hw-keda/
 
@@ -43845,6 +44712,11 @@ Do not hand-edit the tables below; regenerate them instead.
 | 100077 | `RDRS_UNAVAILABLE` | 503 SERVICE_UNAVAILABLE | The RonDB REST Server could not be reached. |
 | 100078 | `TTL_PURGE_TABLE_NOT_FOUND` | 404 NOT_FOUND | The TTL purge worker is not tracking this table. |
 | 100079 | `TERMINAL_INVALID_HOURS` | 400 BAD_REQUEST | The requested terminal session length is out of range. |
+| 100080 | `NPM_GIT_INSPECT_FAILED` | 400 BAD_REQUEST | The git repository could not be read. |
+| 100081 | `OPENCOST_UNAVAILABLE` | 503 SERVICE_UNAVAILABLE | OpenCost could not be reached. |
+| 100082 | `OPENCOST_BAD_REQUEST` | 400 BAD_REQUEST | Invalid cost query. |
+| 100083 | `OPENCOST_NOT_ENABLED` | 404 NOT_FOUND | Cost tracking with OpenCost is not enabled on this cluster. |
+| 100084 | `OPENCOST_NAMESPACE_SHARED` | 409 CONFLICT | The project's namespace is shared with other projects, so its costs cannot be told apart. |
 
 ## DatasetErrorCode
 
@@ -44008,6 +44880,9 @@ Do not hand-edit the tables below; regenerate them instead.
 | 130076 | `GIT_AUTO_REDEPLOY_NOT_SUPPORTED` | 400 BAD_REQUEST | Git auto-redeploy is only supported for apps deployed from a git repository |
 | 130077 | `JOB_DESCRIPTION_TOO_LONG` | 400 BAD_REQUEST | Job description is too long. |
 | 130078 | `INVALID_MEMORY_OVERHEAD_FACTOR` | 400 BAD_REQUEST | Memory overhead factor must be greater than zero. |
+| 130079 | `JOB_UPDATE_FORBIDDEN` | 403 FORBIDDEN | Only the job creator or a Data owner can update this job. |
+| 130080 | `PYTHON_APP_ENTRYPOINT_INVALID` | 400 BAD_REQUEST | The app file is missing or is not a file of the app type's kind. |
+| 130081 | `PYTHON_APP_IDLE_SCALE_TO_ZERO_INVALID` | 400 BAD_REQUEST | Invalid scale-to-zero configuration for the app. |
 
 ## RequestErrorCode
 
@@ -44120,6 +44995,25 @@ Do not hand-edit the tables below; regenerate them instead.
 | 150099 | `LAST_DATA_OWNER_NOT_ALLOWED` | 403 FORBIDDEN | Removing the last data owner of the project is not allowed. |
 | 150100 | `FILE_OWNER_NOT_DATA_OWNER` | 400 BAD_REQUEST | The member chosen to take over the removed member's files must be a data owner in this project. |
 | 150101 | `SYSTEM_PROJECT_REMOVAL_NOT_ALLOWED` | 400 BAD_REQUEST | This project is managed by Hopsworks and cannot be deleted. |
+| 150102 | `PROJECT_NAMESPACE_TOO_LONG` | 400 BAD_REQUEST | Project namespace is too long - cannot be longer than 25 characters. |
+| 150103 | `ML_SYSTEM_NOT_FOUND` | 404 NOT_FOUND | ML system not found in this project. |
+| 150104 | `ML_SYSTEM_PATH_INVALID` | 400 BAD_REQUEST | An ML system's code must be a directory in this project or a Git repository URL. |
+| 150105 | `FACTORY_NOT_FOUND` | 404 NOT_FOUND | Factory not found in this project. |
+| 150106 | `FACTORY_INVALID` | 400 BAD_REQUEST | The factory definition is not valid. |
+| 150107 | `FACTORY_EXISTS` | 409 CONFLICT | A factory of this name already exists in this project. |
+| 150108 | `FACTORY_BUILTIN_READ_ONLY` | 403 FORBIDDEN | A built-in factory cannot be changed or deleted; clone it instead. |
+| 150109 | `FACTORY_HAS_SYSTEMS` | 409 CONFLICT | The factory still has systems; delete them before the factory. |
+| 150110 | `FACTORY_VERSION_CONFLICT` | 409 CONFLICT | The factory changed since you read it; reload it and try again. |
+| 150111 | `ML_SYSTEM_FACTORY_VERSION_INVALID` | 400 BAD_REQUEST | The factory version or definition digest does not match a stored definition of the factory. |
+| 150112 | `ML_SYSTEM_PATH_FORBIDDEN` | 403 FORBIDDEN | You cannot write to this directory, so you cannot register it as a system. |
+| 150113 | `ML_SYSTEM_LIST_FAILED` | 500 INTERNAL_SERVER_ERROR | Could not list the systems of this project. |
+| 150114 | `ML_SYSTEM_PAGE_INVALID` | 400 BAD_REQUEST | offset and limit must not be negative. |
+| 150115 | `FACTORY_DISABLED` | 403 FORBIDDEN | The Factory is not enabled on this cluster. |
+| 150116 | `DEPARTMENT_NOT_FOUND` | 404 NOT_FOUND | Department not found. |
+| 150117 | `DEPARTMENT_ALREADY_EXISTS` | 409 CONFLICT | A department with this name already exists. |
+| 150118 | `DEPARTMENT_NAME_INVALID` | 400 BAD_REQUEST | Department names are 1-63 lowercase letters, digits and '-', starting and ending with a letter or digit. |
+| 150119 | `DEPARTMENT_DEFAULT_CANNOT_BE_DELETED` | 400 BAD_REQUEST | The default department cannot be deleted. |
+| 150120 | `DEPARTMENT_MOVE_REFUSED` | 409 CONFLICT | The project cannot be moved to this department now. |
 
 ## UserErrorCode
 
@@ -44195,6 +45089,8 @@ Do not hand-edit the tables below; regenerate them instead.
 | 160072 | `SECRET_VALUE_TOO_LARGE` | 400 BAD_REQUEST | Secret value is too large. |
 | 160073 | `ENV_VAR_INVALID_VALUE` | 400 BAD_REQUEST | Environment variable value is invalid. |
 | 160074 | `ACCOUNT_DELETION_PENDING_CLEANUP` | 409 CONFLICT | Account still has records awaiting background cleanup. Retry shortly. |
+| 160075 | `LLM_PROVIDER_NOT_FOUND` | 404 NOT_FOUND | LLM provider not found. |
+| 160076 | `LLM_API_KEY_MISSING` | 400 BAD_REQUEST | No API key is saved for this LLM provider. |
 
 ## MetadataErrorCode
 
@@ -44217,7 +45113,7 @@ Do not hand-edit the tables below; regenerate them instead.
 | 190000 | `TOPIC_NOT_FOUND` | 404 NOT_FOUND | No topics found |
 | 190001 | `BROKER_METADATA_ERROR` | 500 INTERNAL_SERVER_ERROR | An error occurred while retrieving topic metadata from broker |
 | 190002 | `TOPIC_ALREADY_EXISTS` | 409 CONFLICT | Kafka topic already exists in database. Pick a different topic name |
-| 190003 | `TOPIC_ALREADY_EXISTS_IN_ZOOKEEPER` | 409 CONFLICT | Kafka topic already exists in ZooKeeper. Pick a different topic name |
+| 190003 | `TOPIC_ALREADY_EXISTS_IN_ZOOKEEPER` | 409 CONFLICT | Kafka topic already exists in the broker. Pick a different topic name |
 | 190004 | `TOPIC_LIMIT_REACHED` | 412 PRECONDITION_FAILED | Topic limit reached. Contact your administrator to increase the number of topics that can be created for this project. |
 | 190005 | `TOPIC_REPLICATION_ERROR` | 400 BAD_REQUEST | Maximum topic replication factor exceeded |
 | 190006 | `SCHEMA_NOT_FOUND` | 404 NOT_FOUND | Topic has no schema attached to it. |
@@ -44240,6 +45136,8 @@ Do not hand-edit the tables below; regenerate them instead.
 | 190023 | `TOPIC_FETCH_FAILED` | 500 INTERNAL_SERVER_ERROR | Could not fetch topic details. |
 | 190024 | `TOPIC_CREATION_FAILED` | 500 INTERNAL_SERVER_ERROR | Could not create topic. |
 | 190025 | `BROKER_MISSING` | 404 NOT_FOUND | Could not find a broker endpoint. |
+| 190026 | `TOPIC_IN_USE_BY_ANOTHER_PROJECT` | 409 CONFLICT | Kafka topic is used by another project's feature store. Pick a different topic name |
+| 190027 | `CHANGE_THROUGH_SHARED_FEATURE_STORE` | 403 FORBIDDEN | Kafka topics and schemas can only be changed through the project's own feature store. |
 
 ## SecurityErrorCode
 
@@ -44692,6 +45590,18 @@ Do not hand-edit the tables below; regenerate them instead.
 | 270331 | `ASOF_SPINE_FILTER_ON_SPINE_COLUMN` | 400 BAD_REQUEST | A filter references a column the inference spine supplies. |
 | 270332 | `ASOF_SPINE_NO_FEATURE_VIEW` | 400 BAD_REQUEST | The inference spine does not name a feature view that can be read. |
 | 270333 | `ASOF_MAX_FEATURE_AGE_INVALID` | 400 BAD_REQUEST | The feature view's max feature age is not a positive duration. |
+| 270334 | `DATA_SOURCE_CREDENTIALS_NOT_PROVIDED` | 400 BAD_REQUEST | You have not added your credentials for this data source. |
+| 270335 | `DATA_SOURCE_CREDENTIALS_INCOMPLETE` | 400 BAD_REQUEST | Your credentials for this data source reference a secret or env variable that no longer exists. |
+| 270336 | `DATA_SOURCE_CREDENTIALS_INVALID` | 400 BAD_REQUEST | The credentials were rejected by the data source. |
+| 270337 | `CREDENTIALS_MODE_NOT_SUPPORTED` | 400 BAD_REQUEST | Provided credentials are not supported for this data source type or operation. |
+| 270338 | `CREDENTIALS_MODE_IMMUTABLE` | 400 BAD_REQUEST | The credentials mode of a data source cannot be changed. |
+| 270339 | `INVALID_CREDENTIALS_MODE_ARGS` | 400 BAD_REQUEST | A data source with provided credentials cannot store credentials. |
+| 270340 | `INVALID_WALLET_PATH` | 400 BAD_REQUEST | The wallet must be in your home directory in this project. |
+| 270341 | `DATA_SOURCE_ENV_NAME_COLLISION` | 400 BAD_REQUEST | Another data source with provided credentials maps to the same env variable names. |
+| 270342 | `DATA_SOURCE_WALLET_DELETE_FAILED` | 500 INTERNAL_SERVER_ERROR | Could not delete a data source wallet. |
+| 270343 | `DATA_SOURCE_CREDENTIALS_RATE_LIMITED` | 429 TOO_MANY_REQUESTS | Too many credential checks against this data source; try again in a minute. |
+| 270344 | `ICEBERG_METASTORE_SYNC_NOT_SUPPORTED` | 400 BAD_REQUEST | Only ICEBERG feature groups on HopsFS are registered as Iceberg tables in the Hive metastore. |
+| 270345 | `ICEBERG_METASTORE_SYNC_ERROR` | 500 INTERNAL_SERVER_ERROR | Could not register the feature group's current Iceberg metadata in the Hive metastore. |
 
 ## AirflowErrorCode
 
@@ -44824,6 +45734,9 @@ Do not hand-edit the tables below; regenerate them instead.
 | 370008 | `INVALID_MANDATORY_TAG` | 400 BAD_REQUEST | Invalid mandatory tag |
 | 370009 | `TAG_MIGRATION_ONGOING` | 503 SERVICE_UNAVAILABLE | Tag migration in progress, wait for it to finish before issuing tag operations. |
 | 370010 | `TAG_ARCHIVE_TOO_MANY_ATTACHMENTS` | 400 BAD_REQUEST | The schema is attached to more artifacts than one archive transaction can cover. |
+| 370011 | `TAG_PATH_NOT_TAGGABLE` | 400 BAD_REQUEST | Only dataset roots can be tagged. Tagging a file or a directory inside a dataset is no longer supported. |
+| 370012 | `TAG_WRITE_DENIED` | 403 FORBIDDEN | Not allowed to change the tags of this dataset. |
+| 370013 | `TAG_MIGRATION_PENDING` | 409 CONFLICT | This dataset still has legacy tags in HopsFS that could not be migrated. Resolve them before changing its tags. |
 
 ## CloudErrorCode
 
@@ -44880,6 +45793,7 @@ Do not hand-edit the tables below; regenerate them instead.
 | 410007 | `NOT_IMPLEMENTED` | 501 NOT_IMPLEMENTED | Internal error dealing with new artifact type |
 | 410008 | `DB_QUERY_ERROR` | 500 INTERNAL_SERVER_ERROR | DB error on query |
 | 410009 | `ARTIFACT_DELETED` | 500 INTERNAL_SERVER_ERROR | Artifact was deleted before command could be executed |
+| 410010 | `REINDEX_IN_PROGRESS` | 409 CONFLICT | A featurestore reindex run is already in progress |
 
 ## GitOpErrorCode
 
@@ -44935,6 +45849,14 @@ Do not hand-edit the tables below; regenerate them instead.
 | 510002 | `LOCAL_QUEUE_ALREADY_EXISTS` | 400 BAD_REQUEST | Local queue already exists |
 | 510003 | `LOCAL_QUEUE_CREATION_FAILED` | 500 INTERNAL_SERVER_ERROR | Local queue creation failed |
 | 510004 | `ERROR_FETCHING_QUEUE` | 500 INTERNAL_SERVER_ERROR | Error fetching configured queue |
+| 510005 | `RUN_AI_DISABLED` | 400 BAD_REQUEST | Run:ai integration is not enabled |
+| 510006 | `RUN_AI_NOT_CONFIGURED` | 503 SERVICE_UNAVAILABLE | Run:ai integration is not configured |
+| 510007 | `RUN_AI_UNREACHABLE` | 503 SERVICE_UNAVAILABLE | Run:ai control plane is unreachable |
+| 510008 | `RUN_AI_REQUEST_FAILED` | 502 BAD_GATEWAY | Run:ai control plane rejected the request |
+| 510009 | `RUN_AI_PROJECT_CONFLICT` | 409 CONFLICT | A Run:ai project with this name is bound to another namespace |
+| 510010 | `RUN_AI_DEPARTMENT_NOT_FOUND` | 404 NOT_FOUND | Run:ai department not found |
+| 510011 | `RUN_AI_GPU_QUOTA_EXCEEDED` | 409 CONFLICT | Not enough GPUs left in the project's Run:ai quota |
+| 510012 | `RUN_AI_PROJECT_BUSY` | 409 CONFLICT | The Run:ai project has running workloads |
 
 ## PlatformIntelligenceErrorCode
 
@@ -44944,6 +45866,8 @@ Do not hand-edit the tables below; regenerate them instead.
 | 520013 | `METADATA_INFERENCE_FAILED` | 500 INTERNAL_SERVER_ERROR | Metadata inference failed. |
 | 520014 | `VLLM_CONFIG_GENERATION_FAILED` | 500 INTERNAL_SERVER_ERROR | vLLM config generation failed. |
 | 520015 | `DEPLOYMENT_GENERATION_FAILED` | 500 INTERNAL_SERVER_ERROR | Deployment generation failed. |
+| 520016 | `SOURCE_SUGGESTION_FAILED` | 500 INTERNAL_SERVER_ERROR | Source table suggestion failed. |
+| 520017 | `FACTORY_MATCH_FAILED` | 500 INTERNAL_SERVER_ERROR | Factory matching failed. |
 
 ## FeatureStoreMetricsErrorCode
 
@@ -44977,6 +45901,11 @@ Do not hand-edit the tables below; regenerate them instead.
 | 540017 | `CATALOG_MOUNT_UNAVAILABLE` | 503 SERVICE_UNAVAILABLE | The Trino pods do not mount the credential-file store |
 | 540018 | `CATALOG_PROJECT_NOT_READY` | 503 SERVICE_UNAVAILABLE | A previous project of this name is still being deleted; catalogs cannot be created until that finishes |
 | 540019 | `DATASOURCE_NOT_MAPPABLE` | 400 BAD_REQUEST | This data source cannot be mapped to a Trino catalog |
+| 540020 | `TRINO_FILE_NOT_FOUND` | 404 NOT_FOUND | No such file in the Trino files tree |
+| 540021 | `CATALOG_SHARE_NOT_FOUND` | 404 NOT_FOUND | Trino catalog share not found |
+| 540022 | `CATALOG_SHARE_INVALID` | 400 BAD_REQUEST | Invalid Trino catalog share |
+| 540023 | `CATALOG_SHARE_NOT_ALLOWED` | 403 FORBIDDEN | Not allowed to share this Trino catalog |
+| 540024 | `CATALOG_CHANGE_NOT_ALLOWED` | 403 FORBIDDEN | Not allowed to change this Trino catalog |
 
 ## AiProviderErrorCode
 
