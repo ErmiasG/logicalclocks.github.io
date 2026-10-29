@@ -8,6 +8,7 @@ Hopsworks provides an administrator with a view of the projects in a Hopsworks c
 
 A Hopsworks administrator is not automatically a member of all the projects in a cluster.
 However, they can see which projects exist, who is the project owner, and they can limit the storage quota and compute quota for each project.
+They can also transfer a project to a new owner.
 
 ## Prerequisites
 
@@ -84,6 +85,36 @@ Administrators can increase the number of Kafka topics a project is allowed to c
 
 Administrators have the option to force delete a project.
 This is useful if the project was not created or deleted properly, e.g., because of an error.
+
+## Transferring a project to a new owner
+
+Every project has one owner, the user who created it unless it has been transferred since.
+The owner cannot be removed from the project and their role cannot be changed, so a project stays attached to an owner who has left until it is transferred.
+
+To transfer a project, click _Transfer ownership_ next to it on the Project management page, choose the new owner and confirm.
+Any activated user with the user or administrator role can be chosen.
+The new owner is added to the project as a Data owner, or promoted to one, if they are not one already.
+The previous owner stays a Data owner, and can then be removed like any other member.
+The project limit of the new owner does not apply to a transfer made by an administrator.
+
+The transfer also gives the new owner:
+
+- the ownership of the project's root directory
+- the project count of the previous owner, which decides how many more projects each of them can create
+- the API keys of the project's Airflow DAGs, which run as the project owner
+
+If one of these steps fails, the owner has still changed and the transfer reports which step did not complete.
+Transfer the project to the same owner again to finish it.
+The permissions check that runs periodically also gives the project's root directory back to the current owner.
+
+The same transfer is available over the REST API, with the id of the project and of the new owner:
+
+```bash
+curl -X PUT -H "Authorization: ApiKey <administrator API key>" \
+  "https://<hopsworks>/hopsworks-api/api/admin/projects/<project id>/owner/<user id>"
+```
+
+How ownership interacts with group mapping is described in [Ownership and group mapping][ownership-and-group-mapping].
 
 ## Controlling who can create projects
 
