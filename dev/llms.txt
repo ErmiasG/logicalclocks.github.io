@@ -262,6 +262,7 @@
 - [Torch](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/tch/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/tch/index.md))
 - [Scikit-learn](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/skl/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/skl/index.md))
 - [LLM](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/llm/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/llm/index.md))
+- [Triton](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/triton/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/triton/index.md))
 - [Python](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/python/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/frameworks/python/index.md))
 - [Import from HuggingFace](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/import_huggingface/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/import_huggingface/index.md))
 - [Model Schema](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/model_schema/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/registry/model_schema/index.md))
@@ -279,6 +280,7 @@
 - [Predictor (KServe)](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/predictor/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/predictor/index.md))
 - [Transformer (KServe)](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/transformer/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/transformer/index.md))
 - [Inference Logger](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/inference-logger/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/inference-logger/index.md))
+- [Transformation Tracing](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/transformation-tracing/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/transformation-tracing/index.md))
 - [Inference Batcher](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/inference-batcher/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/inference-batcher/index.md))
 - [Resources](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/resources/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/resources/index.md))
 - [Autoscaling](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/autoscaling/) ([md](https://docs.hopsworks.ai/latest/user_guides/mlops/serving/autoscaling/index.md))
@@ -385,6 +387,7 @@
 - [Query Engine (Trino)](https://docs.hopsworks.ai/latest/setup_installation/admin/trino/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/trino/index.md))
 - [Superset](https://docs.hopsworks.ai/latest/setup_installation/admin/superset/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/superset/index.md))
 - [GPU Scheduling with Run:ai](https://docs.hopsworks.ai/latest/setup_installation/admin/run_ai/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/run_ai/index.md))
+- [Triton Inference Server](https://docs.hopsworks.ai/latest/setup_installation/admin/triton/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/triton/index.md))
 
 ### Helm Chart Values Reference
 - [Helm chart values reference](https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/) ([md](https://docs.hopsworks.ai/latest/setup_installation/common/helm_chart_values/index.md))
@@ -570,8 +573,17 @@
 #### <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> torch
 - [<code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> signature](https://docs.hopsworks.ai/latest/python-api/hsml/torch/signature/) ([md](https://docs.hopsworks.ai/latest/python-api/hsml/torch/signature/index.md))
 - [<code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> transformer](https://docs.hopsworks.ai/latest/python-api/hsml/transformer/) ([md](https://docs.hopsworks.ai/latest/python-api/hsml/transformer/index.md))
+
+#### <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> triton
+- [<code class="doc-symbol doc-symbol-nav doc-symbol-module"></code> signature](https://docs.hopsworks.ai/latest/python-api/hsml/triton/signature/) ([md](https://docs.hopsworks.ai/latest/python-api/hsml/triton/signature/index.md))
 - [Java API](javadoc)
 
 ## Reference
 - [REST API Status Codes](https://docs.hopsworks.ai/latest/reference/rest_error_codes/) ([md](https://docs.hopsworks.ai/latest/reference/rest_error_codes/index.md))
 - [Docs for AI agents](https://docs.hopsworks.ai/latest/ai/) ([md](https://docs.hopsworks.ai/latest/ai/index.md))
+
+## Releases
+- [Releases](https://docs.hopsworks.ai/latest/releases/) ([md](https://docs.hopsworks.ai/latest/releases/index.md))
+- [5.2](https://docs.hopsworks.ai/latest/releases/5.2/) ([md](https://docs.hopsworks.ai/latest/releases/5.2/index.md))
+- [5.1](https://docs.hopsworks.ai/latest/releases/5.1/) ([md](https://docs.hopsworks.ai/latest/releases/5.1/index.md))
+- [5.0](https://docs.hopsworks.ai/latest/releases/5.0/) ([md](https://docs.hopsworks.ai/latest/releases/5.0/index.md))
