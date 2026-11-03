@@ -1974,6 +1974,8 @@ Sections with defaults show a one-line summary of their answers, with **Edit** t
 For an agentic system the LLM's endpoint, model and key are saved as your account environment variables, `LLM_URL`, `LLM_MODEL` and `LLM_API_KEY`.
 For a batch or real-time system, **Monitoring** (collapsed) sets whether every prediction logs the features it used (on by default) and, in your own words, what to monitor and alert on, such as drift in a feature against the training data or a failed job.
 The build turns them into feature logging on the feature view, feature monitoring checks and alerts, and sends a failure alert for every job the system owns to the project's alert receiver.
+For a real-time system, **Prediction latency tracing** (collapsed, off by default) creates the deployment with tracing: the share of requests recorded as traces, from 0.01% to 100% (10% by default), and the days tracing stays on (7 by default).
+The deployment then times every request's feature lookup, transformations, model predict and feature logging, shown under X-ray latencies on its page, and can be switched off and on there without a restart; it serves one worker per replica, which the build's latency benchmark runs with.
 **Create** runs `hops factory run ml-batch --answers` (or `ml-realtime`, `ml-streaming`, `ml-agent`) in a Terminal tab named after the system, which records it and starts Claude Code on `/hops-build <name>`; the page opens the system once it is registered.
 **Location**, above the form of every factory, sets the folder the system's directory goes in, which holds its code and is its git repository: your home folder in the project by default, or another folder of the project you can write to, such as one in `Resources` so every member can open the code; from the CLI, run `hops factory run` in that folder.
 
@@ -28232,7 +28234,7 @@ With tracing on, the deployment:
 
 - counts every request's transformations on its Prometheus endpoint, per feature view and per transformation function, with the fastest and slowest feature vector of the last minute;
 - records a sample of the requests as traces: the request, its feature lookup, each transformation phase with one span per function in DAG order, the prediction and the feature log write;
-- shows those traces in the `Transformations` section of the deployment page.
+- shows those traces in the `X-ray latencies` section of the deployment page.
 
 It applies to deployments created with `model.deploy(...)` from a model with a feature view, to feature view deployments, and to predictor scripts that call `get_feature_vector` or `get_feature_vectors`.
 
@@ -28276,6 +28278,7 @@ deployment.start()
 ```
 
 `sampling_percentage` is the share of requests recorded as traces, from 0 to 100, and defaults to 10.
+It can be a fraction of a percent: `0.01` records one request in 10,000.
 Every request is counted in the metrics, whatever the sampling.
 
 Tracing stays on for `duration_days`, 7 by default, and then Hopsworks switches it off:
@@ -28316,7 +28319,7 @@ deployment.set_tracing(active=True, sampling_percentage=50)
 deployment.set_tracing(active=True, duration_days=30)
 ```
 
-Switching tracing on, or changing `duration_days` while it is on, keeps it on for `duration_days` from now.
+Switching tracing on, changing `duration_days` while it is on, or starting a stopped deployment whose tracing is on keeps it on for `duration_days` from then.
 `deployment.tracing.active_until` is when it will be switched off.
 Hopsworks checks every 5 minutes: once the period has ended it switches tracing off, sets `active` to `False` and records the end in `deployment.tracing.expired_at`.
 
@@ -28351,11 +28354,49 @@ The response carries `activeUntil` and `expiredAt` in epoch milliseconds.
 
 ## Web UI
 
-The deployment page of a deployment that serves a feature view has a `Transformations` section.
+The deployment page of a deployment that serves a feature view has an `X-ray latencies` section.
 While tracing is on, the section lists the traced requests; expanding one shows its spans with their durations.
-While it is off, the section is titled `Feature View Transformations: Metrics` and shows `Tracing is disabled`; clicking it shows how to turn tracing on.
-On a deployment created with tracing, the switch in the section header turns it off and on, like `set_tracing`, and shows the sampling and the time tracing will be switched off.
+While it is off, the section shows `Tracing is disabled`; clicking it shows how to turn tracing on.
+On a deployment created with tracing, the switch in the section header turns it off and on, like `set_tracing`, and shows the time tracing will be switched off.
+Next to it, `Traced requests` sets the sampling to 0.01%, 0.1%, 1%, 10% or 100%, without restarting the deployment.
 Once the period has ended, the section says when tracing was switched off.
+
+On a deployment created with tracing, the section opens with `Request time by stage`, a table of the requests over the last 24 hours with a row for each stage of each feature view or model, `Feature view / model` naming it with its version, and the number of requests and the minimum, p50, p95, p99 and maximum time spent in it:
+
+| Stage | Time measured |
+| --- | --- |
+| Feature lookup | Reading the feature vectors, including their transformations |
+| Transformations | The on-demand and model-dependent transformations of all the request's feature vectors |
+| Model predict | `model_predict` |
+| Feature log (queueing) | The default predictor queueing the feature log write, which runs after the response, or a predictor script's `log` call |
+
+The buttons next to it change the window to 6 hours, 1 hour, 10 minutes or 1 minute, and the values refresh every minute.
+Every request is counted while tracing is on, whatever the sampling.
+The default predictor reports every stage, for its feature view and its model.
+A predictor script that looks up or logs through several feature views gets a feature lookup, transformations and feature log row for each of them, since `get_feature_vector`, `get_feature_vectors`, their `_async` variants and `log` time themselves; its model calls are its own code, so it has no model predict row.
+The quantiles are estimated from a histogram with ten buckets a decade, so one can be up to 26% off; the minimum and maximum are exact, read from gauges that cover up to the last two minutes.
+
+The same statistics over the REST API, with `window` one of `1m`, `10m`, `1h`, `6h` and `24h` (the default):
+
+```bash
+curl -H "Authorization: ApiKey $HOPSWORKS_API_KEY" \
+  "https://$HOPSWORKS_HOST/hopsworks-api/api/project/$PROJECT_ID/serving/$DEPLOYMENT_ID/latency?window=1h"
+```
+
+```json
+{
+  "window": "1h",
+  "stages": [
+    {"stage": "feature_lookup", "name": "fraud_fv:1", "requests": 1234, "minSeconds": 0.0019, "p50Seconds": 0.0023, "p95Seconds": 0.0031, "p99Seconds": 0.0042, "maxSeconds": 0.0094},
+    {"stage": "transformations", "name": "fraud_fv:1", "requests": 1234, "minSeconds": 0.00011, "p50Seconds": 0.00016, "p95Seconds": 0.00031, "p99Seconds": 0.00052, "maxSeconds": 0.0019},
+    {"stage": "model_predict", "name": "fraud_model:3", "requests": 1234, "minSeconds": 0.00039, "p50Seconds": 0.00047, "p95Seconds": 0.00062, "p99Seconds": 0.00081, "maxSeconds": 0.0021},
+    {"stage": "feature_log", "name": "fraud_fv:1", "requests": 1234, "minSeconds": 0.000013, "p50Seconds": 0.000022, "p95Seconds": 0.000031, "p99Seconds": 0.000039, "maxSeconds": 0.000041}
+  ]
+}
+```
+
+`name` is the feature view or model as `<name>:<version>`. Only entries with requests in the window are returned.
+Another `window` answers `400` with error code `240069`; a Prometheus that does not answer gives `503` with error code `240070`.
 
 The deployment's Grafana dashboard, opened with `View in Grafana` in the `Metrics` section, charts the metrics under `Feature view transformations`.
 
@@ -28368,6 +28409,8 @@ The deployment's Grafana dashboard, opened with `View in Grafana` in the `Metric
 | `hopsworks_transformation_function_calls_total`, `hopsworks_transformation_function_seconds_total`, `hopsworks_transformation_function_errors_total` | the above, `transformation`, `outputs` | The same per transformation function, and the calls that raised |
 | `hopsworks_transformation_function_window_min_seconds`, `hopsworks_transformation_function_window_max_seconds` | the above | Fastest and slowest call of the function in the last complete 60 second window |
 | `hopsworks_transformation_dag_edge` | the above, `depends_on` | 1 for each edge of the transformation DAG |
+| `hopsworks_prediction_stage_seconds` | `stage`, `name` | Histogram of the time one request spent in a stage, `feature_lookup`, `transformations`, `model_predict` or `feature_log`, of the feature view or model `name` (`<name>:<version>`), with buckets ten a decade from 10 µs to 10 s |
+| `hopsworks_prediction_stage_window_min_seconds`, `hopsworks_prediction_stage_window_max_seconds` | `stage`, `name` | Fastest and slowest request in the stage in the current and the last complete 60 second window |
 
 The average time is `rate(..._seconds_total[5m]) / rate(..._calls_total[5m])`.
 `outputs` identifies a function, since one function can be attached to several features.
@@ -28395,26 +28438,34 @@ The deployment page draws the write and `feature_view.log` as a separate backgro
 
 Only the first row of a request is traced, so a batch request records one `transformations` span; all of its rows are counted in the metrics.
 
-## Trace storage limits
+## Trace storage
 
-Traces are stored in the online feature store's disk tablespace, which feature groups with disk columns share.
-Each deployment's `duration_days` bounds how long it records traces; three cluster settings bound what model and feature view deployments store there:
+Traces are kept in the online feature store only, in the project's `serving_traces` feature group, and are never written to the offline store.
+A trace is typically two rows: its root span, and the rest of its spans as JSON; a trace whose spans arrive in several batches, or exceed 60,000 bytes, takes more.
+The feature group has a time to live, 36 hours by default, counted from the start of each trace, so the deployment page shows the requests traced in that window.
+Expired traces disappear from reads at once and RonDB deletes them in the background.
+To keep a project's traces longer or shorter, change the feature group's time to live with [`enable_ttl`][hsfs.feature_group.FeatureGroup.enable_ttl].
+
+The rows are in the online feature store's disk tablespace, which feature groups with disk columns share; the start time and the keys stay in memory, as the time to live requires.
+Each deployment's `duration_days` bounds how long it records traces; these cluster settings bound what model and feature view deployments store:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
+| `serving_tracing_online_ttl_hours` | `36` | Time to live of a project's `serving_traces` feature group, applied when it is created. |
 | `serving_tracing_max_traces_per_minute` | `60` | Most traces one predictor pod records per minute, whatever the sampling percentage. Below 1, no cap. |
-| `serving_tracing_retention_days` | `7` | Traces older than this are deleted. `0` keeps them. |
-| `serving_tracing_pause_free_percent` | `20` | Tracing is paused on every model and feature view deployment while less than this percentage of the tablespace is free. |
+| `serving_tracing_pause_free_percent` | `20` | Tracing is paused on every model and feature view deployment while less than this percentage of the tablespace, or of RonDB DataMemory, is free. |
 
-Hopsworks checks the tablespace every 5 minutes.
-A paused deployment reads `paused_reason == "DISK_NEARLY_FULL"` on `deployment.tracing`, and its page says tracing is paused.
-Deleted traces free space for later traces in the same tables, not in the tablespace, so a pause lifts once an administrator adds a data file to the tablespace and at least 10 points more than the threshold are free.
+At the cap, a predictor pod keeps at most `60 * 60 * 36` traces online, about 1.5 KB of RonDB memory each with five transformation functions.
+Hopsworks checks the tablespace and DataMemory every 5 minutes.
+A paused deployment reads `paused_reason == "DISK_NEARLY_FULL"` or `"MEMORY_NEARLY_FULL"` on `deployment.tracing`, and its page says tracing is paused.
+The pause lifts once both have at least 10 points more than the threshold free.
+Expired and deleted traces free space for later traces in the same table, not in the tablespace, so a disk pause lifts once an administrator adds a data file to the tablespace.
 The settings are Helm values under `hopsworks.variables`; a changed cap reaches running pods the next time their tracing is switched or they restart.
 Deleting a deployment deletes its traces.
 
 The `LowDiskDataFileExtents` alert fires when less than 20% of the tablespace is free.
 
-To delete a deployment's traces yourself, all of them or those created before a time:
+To delete a deployment's traces before they expire, all of them or those started before a time:
 
 ```python
 from datetime import datetime, timedelta
@@ -28425,9 +28476,10 @@ deployment.delete_traces(
 )
 ```
 
-Each request deletes at most `batch_size` rows (default 1000, at most 10000) from each trace table in one transaction, since RonDB caps the operations one transaction holds; `delete_traces` repeats it until none are left and returns the number of rows deleted.
+Each request deletes at most `batch_size` rows (default 1000, at most 10000) in one transaction, since RonDB caps the operations one transaction holds; `delete_traces` repeats it until none are left and returns the number of rows deleted.
 Over the REST API, one request deletes one batch and returns `{"deleted": <rows>}`; repeat it until `deleted` is 0.
-`until` is in epoch milliseconds and is optional:
+`until` is in epoch milliseconds and is optional.
+With it, a trace whose request started before `until` is deleted whole, together with the spans it recorded after `until`:
 
 ```bash
 curl -X DELETE \
@@ -47160,9 +47212,11 @@ When you upgrade, read the breaking changes of every release between yours and t
 | [5.2.2][hopsworks-5-2-2] | 2026-10-28 | [5.2.2](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.2.2) |
 | [5.2.1][hopsworks-5-2-1] | 2026-10-16 | [5.2.1](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.2.1) |
 | [5.2.0][hopsworks-5-2-0] | 2026-10-15 | [5.2.1](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.2.1) |
+| [5.1.3][hopsworks-5-1-3] | TBD | [5.1.2](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.1.2) |
 | [5.1.2][hopsworks-5-1-2] | 2026-10-16 | [5.1.2](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.1.2) |
 | [5.1.1][hopsworks-5-1-1] | 2026-10-09 | [5.1.1](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.1.1) |
 | [5.1.0][hopsworks-5-1-0] | 2026-09-24 | [5.1.0](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.1.0) |
+| [5.0.15][hopsworks-5-0-15] | TBD | [5.0.10](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.0.10) |
 | [5.0.14][hopsworks-5-0-14] | 2026-10-16 | [5.0.10](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.0.10) |
 | [5.0.13][hopsworks-5-0-13] | 2026-09-28 | [5.0.9](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.0.9) |
 | [5.0.12][hopsworks-5-0-12] | 2026-09-21 | [5.0.9](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.0.9) |
@@ -47265,6 +47319,8 @@ Helm chart 5.2.2 · Released on 2026-10-28 · Changes since [5.2.1][hopsworks-5-
 
 - [API] [FRONTEND] [HELM] Changed how OnlineFS checks the topic of the records it writes, to address a vulnerability ([what this affects][docs-upgrade-onlinefs]).
   Restart the producers that hold on to a topic after it changes; on a Kafka where records reach OnlineFS on a renamed topic, such as a mirrored secondary, set `onlinefs.configmapOverrides.onlinefssite.service.verifyFeatureGroupTopic: false`.
+- [API] A batch REST request with more than 4096 operations, or a batch feature vector request with more than 4096 entries, is now rejected by the RonDB REST server with HTTP 413, where it accepted any number; split larger batches, or raise `rondb.rondb.rdrs.internal.maxOperationsPerBatchRequest`.
+- [API] A primary key read of a BLOB or TEXT value larger than 2 MiB now fails that operation with HTTP 413, and a feature vector with such a value fails with error 22 `Feature value too large.`, where the RonDB REST server returned it; raise `rondb.rondb.rdrs.internal.maxBlobTextValueBytes` (`0` for no limit) if you store larger values.
 - [API] [FRONTEND] On a cluster with Kueue, Spark jobs are now queued by Kueue and run with static executors instead of dynamic allocation: a job saved with dynamic allocation runs its dynamic-allocation minimum, at least one executor, and `spark.dynamicAllocation.enabled=true` is refused; set `spark.executor.instances` for more executors ([what changes][docs-kueue-what-changes]).
 - [API] [FRONTEND] The upgrade deletes the Deployment of every Python app whose executions have all ended, also one that still answers requests; start such an app again to keep it running.
 - [API] [FRONTEND] Apps created from 5.2.2 on can only read the online feature store database, apart from the tables they create with `App.create_table` and change with `App.alter_table` in the Python client, or with `createTable` and `alterTable` of `@hopsworks/app` in Node.js; before, the apps of Data Owners could create, alter and write to any of its tables with their own SQL ([database access][docs-apps-db]).
@@ -47275,6 +47331,7 @@ Helm chart 5.2.2 · Released on 2026-10-28 · Changes since [5.2.1][hopsworks-5-
 - [HELM] Hopsworks now uses Kueue 0.20.3 installed as its own release, `kueue` in `kueue-system`, instead of the Kueue 0.12.2 bundled in its namespace, and the chart refuses to render while the bundled Kueue still runs ([Kueue outside the Hopsworks namespace][docs-upgrade-kueue-external]).
   With `global._hopsworks.kueue.enabled: true`, move Kueue with the 5.1 chart's `migrate-to-external.sh` before the upgrade, run the chart's `upgrade-kueue.sh` after it, and remove `hw-kueue.managerConfig`, `hw-kueue.nameOverride` and every `hw-kueue.kueue` value but `enabled` from your values, or the values schema rejects the upgrade.
 - [HELM] Remove `rondb.rondb.rdrs.internal.bufferSize`, `gomaxprocs` and `maxAllocatedBuffers` from your values, which the chart ignored, or `helm upgrade` fails before changing anything.
+- [HELM] If you pin `rondb.rondb.images.rondb.tag` to a version older than 26.02.12, set `rondb.rondb.rdrs.internal.bufferShrinkAfterS: null` before upgrading, or upgrade the image: the chart now sets `Internal.BufferShrinkAfterS`, which RonDB REST server images before 26.02.12 reject, and they then don't start.
 - [HELM] The hopsworks, HopsFS and Hive schema migrations now run on the DDL SQL node instead of the application SQL nodes, so they no longer wait for application queries; a cluster that disables it (`rondb.rondb.meta.ddlMySQLd.enabled: false`) sets `hopsworks.dependencies.mysql.ddlConsulServiceName`, `hopsfs.dependencies.mysql.ddlConsulServiceName` and `hive.metastore.dependencies.mysql.ddlConsulServiceName` to `mysql`, or the migrations wait for a SQL node that doesn't exist ([DDL SQL node][docs-upgrade-ddl]).
 - [HELM] The chart package no longer ships `values.aws.yaml`, `values.azure.yml`, `values.gcp.yaml`, `values.rhel8.yaml` and `values.nodeselector-tolerations.yaml`; keep a copy of the one you pass, or start from the values file of the [AWS][docs-setup-aws], [Azure][docs-setup-azure] or [GCP][docs-setup-gcp] setup guide and take the RHEL 8 and node pool values from [Python build performance][docs-buildkitd-rhel8] and [dedicated node pools][docs-node-pools].
 
@@ -47329,6 +47386,7 @@ Follow [Changes from 5.2.2][docs-upgrade-changes-from-522] in the upgrade guide.
 ### Configuration changes
 
 - [HELM] Changed the memory request and limit of the RonDB REST server pods (`rondb.rondb.resources.requests.memory.rdrsMiB`, `rondb.rondb.resources.limits.memory.rdrsMiB`) from 100 MiB and 500 MiB to 2 GiB; check node capacity before the upgrade.
+  Large batches, wide rows or feature views with many feature groups can fill the RonDB REST server's buffer pool, which then answers HTTP 503, also to concurrent requests, and raising `maxOperationsPerBatchRequest` doesn't enlarge it: raise both values above 2 GiB for such workloads, or send smaller batches or fewer at once.
 - [HELM] Changed the default of `hopsworks.variables.agent_deployment_otel_memory_mb`, the memory request and limit of the OTLP sidecar of traced agent deployments, from 1024 to 2048.
   Each traced agent deployment reserves it on its node once it is recreated, so check node memory before you redeploy them ([OTLP sidecar][docs-upgrade-otlp]).
 - [HELM] Changed the default of `trino.authSeeder.ttlSecondsAfterFinished` from 3600 to `null`, which keeps the finished Trino auth seed Job for `global._hopsworks.jobs.ttlSecondsAfterFinished` (1 day).
@@ -47715,6 +47773,27 @@ Source: https://docs.hopsworks.ai/latest/releases/5.1/
 # Release notes { #hopsworks-5-1 }
 
 The releases of Hopsworks 5.1, newest first.
+
+## 5.1.3 { #hopsworks-5-1-3 }
+
+Helm chart 5.1.3 · Released on TBD · Changes since [5.1.2][hopsworks-5-1-2] · Python client [5.1.2](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.1.2), unchanged
+
+### What's changed
+
+- Changed the RonDB REST server to size its buffer pool from its memory limit, return idle buffers after 15 minutes and opt out of transparent huge pages, so that its memory stays bounded.
+
+### Breaking changes
+
+- [API] A batch REST request with more than 4096 operations, or a batch feature vector request with more than 4096 entries, is now rejected by the RonDB REST server with HTTP 413, where it accepted any number; split larger batches, or raise `rondb.rondb.rdrs.internal.maxOperationsPerBatchRequest`.
+- [API] A primary key read of a BLOB or TEXT value larger than 2 MiB now fails that operation with HTTP 413, and a feature vector with such a value fails with error 22 `Feature value too large.`, where the RonDB REST server returned it; raise `rondb.rondb.rdrs.internal.maxBlobTextValueBytes` (`0` for no limit) if you store larger values.
+- [HELM] Remove `rondb.rondb.rdrs.internal.bufferSize`, `gomaxprocs` and `maxAllocatedBuffers` from your values, which the chart ignored, or `helm upgrade` fails before changing anything.
+- [HELM] If you pin `rondb.rondb.images.rondb.tag` to a version older than 26.02.12, set `rondb.rondb.rdrs.internal.bufferShrinkAfterS: null` before upgrading, or upgrade the image: the chart now sets `Internal.BufferShrinkAfterS`, which RonDB REST server images before 26.02.12 reject, and they then don't start.
+
+### Configuration changes
+
+- [HELM] Changed the memory request and limit of the RonDB REST server pods (`rondb.rondb.resources.requests.memory.rdrsMiB`, `rondb.rondb.resources.limits.memory.rdrsMiB`) from 100 MiB and 500 MiB to 2 GiB; check node capacity before the upgrade.
+  Large batches, wide rows or feature views with many feature groups can fill the RonDB REST server's buffer pool, which then answers HTTP 503, also to concurrent requests, and raising `maxOperationsPerBatchRequest` doesn't enlarge it: raise both values above 2 GiB for such workloads, or send smaller batches or fewer at once.
+- [HELM] Added the RonDB REST server settings the chart didn't expose, under `rondb.rondb.rdrs`, such as its buffer pool, its request, BLOB and batch size limits, its rate limit and its use of transparent huge pages.
 
 ## 5.1.2 { #hopsworks-5-1-2 }
 
@@ -48207,6 +48286,27 @@ Source: https://docs.hopsworks.ai/latest/releases/5.0/
 # Release notes { #hopsworks-5-0 }
 
 The releases of Hopsworks 5.0, newest first.
+
+## 5.0.15 { #hopsworks-5-0-15 }
+
+Helm chart 5.0.15 · Released on TBD · Changes since [5.0.14][hopsworks-5-0-14] · Python client [5.0.10](https://github.com/logicalclocks/hopsworks-api/releases/tag/5.0.10), unchanged
+
+### What's changed
+
+- Changed the RonDB REST server to size its buffer pool from its memory limit, return idle buffers after 15 minutes and opt out of transparent huge pages, so that its memory stays bounded.
+
+### Breaking changes
+
+- [API] A batch REST request with more than 4096 operations, or a batch feature vector request with more than 4096 entries, is now rejected by the RonDB REST server with HTTP 413, where it accepted any number; split larger batches, or raise `rondb.rondb.rdrs.internal.maxOperationsPerBatchRequest`.
+- [API] A primary key read of a BLOB or TEXT value larger than 2 MiB now fails that operation with HTTP 413, and a feature vector with such a value fails with error 22 `Feature value too large.`, where the RonDB REST server returned it; raise `rondb.rondb.rdrs.internal.maxBlobTextValueBytes` (`0` for no limit) if you store larger values.
+- [HELM] Remove `rondb.rondb.rdrs.internal.bufferSize`, `gomaxprocs` and `maxAllocatedBuffers` from your values, which the chart ignored, or `helm upgrade` fails before changing anything.
+- [HELM] If you pin `rondb.rondb.images.rondb.tag` to a version older than 26.02.12, set `rondb.rondb.rdrs.internal.bufferShrinkAfterS: null` before upgrading, or upgrade the image: the chart now sets `Internal.BufferShrinkAfterS`, which RonDB REST server images before 26.02.12 reject, and they then don't start.
+
+### Configuration changes
+
+- [HELM] Changed the memory request and limit of the RonDB REST server pods (`rondb.rondb.resources.requests.memory.rdrsMiB`, `rondb.rondb.resources.limits.memory.rdrsMiB`) from 100 MiB and 500 MiB to 2 GiB; check node capacity before the upgrade.
+  Large batches, wide rows or feature views with many feature groups can fill the RonDB REST server's buffer pool, which then answers HTTP 503, also to concurrent requests, and raising `maxOperationsPerBatchRequest` doesn't enlarge it: raise both values above 2 GiB for such workloads, or send smaller batches or fewer at once.
+- [HELM] Added the RonDB REST server settings the chart didn't expose, under `rondb.rondb.rdrs`, such as its buffer pool, its request, BLOB and batch size limits, its rate limit and its use of transparent huge pages.
 
 ## 5.0.14 { #hopsworks-5-0-14 }
 
