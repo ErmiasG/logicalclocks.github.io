@@ -13,7 +13,7 @@ The commands assume Hopsworks is installed in the `hopsworks` namespace.
 | ------- | ---------- | ----------------- |
 | [5.0.x to 5.1.x][upgrade-50-to-51] | 1.3.x to 2.19.x | Kubernetes 1.34 or later before the upgrade, a first Helm 4 upgrade, and from 5.0.13 or earlier to 5.1.2 or later [the Trino query history][upgrade-trino-query-history]. |
 | [5.1.x to 5.2.x][upgrade-51-to-52] | 2.19.x to 3.8.0: upgrade to 5.2.1 or later | The index pass, Kafka moves to KRaft, KEDA, Kubernetes 1.37 only afterwards, Trino, from 5.2.2 [OnlineFS and the schema migrations][upgrade-changes-from-522], and from 5.2.3 with your own image registry [the Envoy image of Python apps][upgrade-changes-from-523]. |
-| [5.2.x to 5.3.x][upgrade-52-to-53] | stays on 3.8.0 | [Strimzi 1.3][upgrade-strimzi-13] with central before its satellites, ICEBERG feature groups in Trino, the Filebeat registry, the memory of the OTLP sidecar of agent deployments, [Envoy Gateway][upgrade-envoy-gateway] when turned on, with an external Kafka [the topics Hopsworks creates and deletes on it][upgrade-byok-topics], [notification topics and shared feature stores][upgrade-notification-topics], from 5.2.0 [the subset shares in Trino][upgrade-trino-subset-shares] and the OpenSearch security configuration, and from 5.2.0 or 5.2.1 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
+| [5.2.x to 5.3.x][upgrade-52-to-53] | stays on 3.8.0 | [Additional prerequisites][upgrade-additional-prerequisites], [Strimzi 1.3][upgrade-strimzi-13] with central before its satellites, ICEBERG feature groups in Trino, the Filebeat registry, with your own pipelines, outputs or plugins [Logstash 9][upgrade-logstash-9], the memory of the OTLP sidecar of agent deployments, [Envoy Gateway][upgrade-envoy-gateway] and [LLM Gateway][upgrade-llm-gateway] when turned on, with an external Kafka [the topics Hopsworks creates and deletes on it][upgrade-byok-topics], [notification topics and shared feature stores][upgrade-notification-topics], from 5.2.0 [the subset shares in Trino][upgrade-trino-subset-shares] and the OpenSearch security configuration, and from 5.2.0 or 5.2.1 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
 
 ## Before every upgrade { #upgrade-before-every-upgrade }
 
@@ -186,26 +186,47 @@ OpenSearch stays on 3.8.0.
 An upgrade from 5.2.0 or 5.2.1 also gets the [changes from 5.2.2][upgrade-changes-from-522].
 An upgrade from 5.2.0 also crosses two changes of 5.2.1, described under 5.1.x to 5.2.x: [Feature groups shared with a subset of their features][upgrade-trino-subset-shares], and the OpenSearch [Security configuration][opensearch-security-configuration], which addresses a vulnerability.
 
+### Additional upgrade prerequisites { #upgrade-additional-prerequisites }
+
+The identity running Helm or syncing ArgoCD must have permission to manage `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` resources in the `admissionregistration.k8s.io` API group.
+
+Before upgrading, check that every project namespace carries the label configured by `global._hopsworks.projectPodSecurity.namespaceLabel`, which defaults to `hopsworks.ai/project`:
+
+```bash
+kubectl get namespaces -L hopsworks.ai/project
+```
+
+If you supply project namespaces yourself, set `global._hopsworks.projectPodSecurity.namespaceLabel` to an administrator-managed label key, for example `ops.example.org/hopsworks-project`, and add that label to every project namespace.
+Include it in `hopsworks.variables.project_namespace_labels` so Hopsworks also labels new project namespaces, preserving any existing entries in that setting.
+The `hopsworks.ai/project` label also controls namespace ownership during [uninstallation][uninstalling-hopsworks]; do not add it to a namespace you intend to manage yourself.
+
+For multiple releases on the same Kubernetes cluster, set `global._hopsworks.projectPodSecurity.namespaceMatchLabels` to each release's tenant labels.
+Leaving `namespaceMatchLabels` empty selects every namespace carrying `namespaceLabel`, including projects belonging to other releases.
+Every release must select a distinct set of project namespaces.
+Add these labels to existing and pre-created project namespaces and include them in `hopsworks.variables.project_namespace_labels` before upgrading.
+
+Project pod admission can be turned off with `global._hopsworks.projectPodSecurity.enabled: false`, which skips these prerequisites, but we recommend keeping it on.
+
 ### Strimzi 1.3 { #upgrade-strimzi-13 }
 
-From the 5.2.x patch release that uses Strimzi 1.3, and in 5.3, the chart deploys Strimzi 1.3.0 in place of 1.2.0, and Kafka stays on 4.3.1.
+From the 5.2.x patch release that uses Strimzi 1.3, and in 5.3, the chart deploys Strimzi 1.3.1 in place of 1.2.0, and Kafka stays on 4.3.1.
 An upgrade from a release that already uses Strimzi 1.3 crosses none of this.
 
 - **Upgrade central before its satellites**, the reverse of the order from 5.1.x to 5.2.x.
-  A satellite runs on central's operator, and the 1.2.0 operator would replace the satellite's controller onto the 1.3.0 image without the configuration that image reads, which leaves the satellite's Kafka down until central is upgraded.
+  A satellite runs on central's operator, and the 1.2.0 operator would replace the satellite's controller onto the 1.3.1 image without the configuration that image reads, which leaves the satellite's Kafka down until central is upgraded.
   The satellite's upgrade therefore refuses to start while its Kafka was last reconciled by an older 1.x operator.
-  Upgrade central, wait until the satellite's Kafka reports the 1.3.0 operator, then upgrade the satellite:
+  Upgrade central, wait until the satellite's Kafka reports the 1.3.1 operator, then upgrade the satellite:
 
     ```sh
     kubectl get kafka <cluster> -n <satellite-namespace> -o jsonpath='{.status.operatorLastSuccessfulVersion}'
     ```
 
-  Until its own upgrade, the satellite keeps its pods on the old image under the 1.3.0 operator, and that upgrade replaces each of them once.
+  Until its own upgrade, the satellite keeps its pods on the old image under the 1.3.1 operator, and that upgrade replaces each of them once.
 - **No step before `helm upgrade`.**
-  The `strimzi-crd-upgrade` hook applies the Strimzi 1.3.0 CRDs before the operator is replaced.
+  The `strimzi-crd-upgrade` hook applies the Strimzi 1.3.1 CRDs before the operator is replaced.
 - **The brokers and controllers are replaced once**, by the new operator, for the new image.
   The chart stops the outgoing operator before it starts the new one, through `kafka.strimzi-kafka-operator.deploymentStrategy`, so that the 1.2.0 operator does not act on the new image.
-  A pod the 1.2.0 operator replaces onto the 1.3.0 image lacks the configuration that image reads, and restarts until the new operator takes over.
+  A pod the 1.2.0 operator replaces onto the 1.3.1 image lacks the configuration that image reads, and restarts until the new operator takes over.
   It then recovers on its own, which can take a few minutes, because Kubernetes waits up to five minutes between restarts of a failing container.
   The setting makes that unlikely rather than impossible: nothing waits for the old operator to exit.
   If your values set `kafka.strimzi-kafka-operator.deploymentStrategy.type: Recreate`, also set `rollingUpdate: null` there, or the merged strategy is rejected.
@@ -215,7 +236,7 @@ An upgrade from a release that already uses Strimzi 1.3 crosses none of this.
   Strimzi 1.3 turns its `UseBackgroundPodDeletion` feature gate on by default, so that CNI plugins which remove a pod's network endpoints when its object is deleted, such as Cilium, no longer cut a broker off before it has shut down.
   To keep the earlier foreground deletion, set `kafka.strimzi-kafka-operator.featureGates: "-UseBackgroundPodDeletion"`.
 - **Under ArgoCD, the `ignoreDifferences` entry for the Kafka CRD is no longer needed.**
-  Strimzi 1.3.0's Kafka CRD no longer has the empty map that the entry in [Under ArgoCD][kafka4-argocd] ignores, and the entry matches nothing on it, so it can stay.
+  Strimzi 1.3.1's Kafka CRD no longer has the empty map that the entry in [Under ArgoCD][kafka4-argocd] ignores, and the entry matches nothing on it, so it can stay.
 
 ### ICEBERG feature groups in Trino { #upgrade-iceberg-trino }
 
@@ -263,6 +284,23 @@ On the upgrade to 5.3:
 - Leave the existing contents of `/var/lib/filebeat-data` in place.
   Nothing in the chart reads them, and they may belong to another Filebeat on the node.
 
+### Logstash 9 { #upgrade-logstash-9 }
+
+In 5.3, and from the 5.2.x patch release that ships it, Logstash moves from 7.17 to 9.5.
+The chart's own pipelines need nothing, and documents keep their field names, because the chart sets `pipeline.ecs_compatibility: disabled`.
+Pipelines, outputs and plugins you added through `logstash.extraPipelines`, `logstash.additional_audit_outputs` or `logstash.plugins` need a check before the upgrade:
+
+- **Rename the TLS settings of `elasticsearch`, `http` and `tcp` outputs in the same upgrade.**
+  The output plugins move up a major version: `elasticsearch` 11 to 12, `http` 5 to 6, `tcp` 6 to 7 and `opensearch` 1 to 2.
+  The new `elasticsearch`, `http` and `tcp` outputs refuse their old SSL settings, such as `cacert`, `ssl` and `ssl_certificate_verification` on `elasticsearch`, `cacert`, `client_cert`, `client_key`, `keystore` and `truststore` on `http`, and `ssl_enable`, `ssl_cert`, `ssl_cacert` and `ssl_verify` on `tcp`.
+  The 7.17 versions do not know the replacement names, such as `ssl_enabled` and `ssl_certificate_authorities`, so no TLS setting works on both versions, and the values of the upgrade itself must carry the new names.
+  Each plugin's page in the [Logstash plugin reference](https://www.elastic.co/docs/reference/logstash/plugins) lists them.
+- **A pipeline that fails to start stops all log shipping.**
+  Logstash keeps running the other pipelines, but the routing pipeline waits on every event for the one that did not start, so service, project and audit logs all stop while the Logstash pod stays ready.
+  After the upgrade, look for `is obsolete and is no longer available` in the Logstash log.
+- **The kafka integration, the `azure_event_hubs` input and the `webhdfs` output are no longer in the image.**
+  A pipeline that uses one of them needs it in `logstash.plugins`, which installs it when the Logstash pod starts, so it needs access to `rubygems.org` and cannot run on an airgapped cluster.
+
 ### Agent deployments reserve 2 GiB for their OTLP sidecar { #upgrade-agent-otlp-sidecar }
 
 An agent deployment with tracing enabled runs a `hops-otlp` sidecar next to the agent.
@@ -299,6 +337,8 @@ What changes for users and operators ([details](kueue_external.md#what-changes))
 - A workload whose pods are not all ready 30 minutes after admission is evicted and queued again (Kueue 0.19 `waitForPodsReady`).
 - The Ray autoscaler and job-submitter sidecars count against quota (Kueue 0.19).
 - A workload without a priority class gets the WorkloadPriorityClass named `default`, when one exists (Kueue 0.20).
+- Disk limits need Kueue to leave `ephemeral-storage` out of its quota checks, which the upgrade script sets up.
+  It stops before changing the cluster when it cannot read the queues, or when disk is budgeted but some ClusterQueues do not cover it ([Disk limits][kueue-disk-limits]).
 
 ### Bring your own Kafka: Hopsworks creates and deletes topics { #upgrade-byok-topics }
 
@@ -351,7 +391,7 @@ Before, it created no topics there, so every topic had to exist before ingestion
 
 New in 5.3 and off by default: [Envoy Gateway][envoy-gateway] routes Standard-mode model deployments through the Kubernetes Gateway API, with Istio still the front door.
 
-- **Nothing moves unless you turn it on.**
+- **Nothing moves unless you enable it.**
   An upgrade that leaves `global._hopsworks.envoyGateway` alone routes every request as before.
 - **Two components restart during the upgrade.**
   The KServe controller restarts, and the running deployments keep serving meanwhile.
@@ -359,7 +399,7 @@ New in 5.3 and off by default: [Envoy Gateway][envoy-gateway] routes Standard-mo
   `model-serving-authenticator` restarts with a new listener for the Gateway.
   While its old pod is replaced, a few requests can get a 403, because the 5.2 pod stops without waiting for the new one; from 5.3 its restarts wait, so later ones lose no request.
 
-To turn it on in a cluster with running deployments, upgrade twice, so that the Gateway is up before any deployment moves.
+To enable it in a cluster with running deployments, upgrade twice, so that the Gateway is up before any deployment moves.
 Clients keep their endpoint, Knative-mode deployments stay on Istio, and no deployment restarts.
 
 1. **Prepare.**
@@ -415,6 +455,27 @@ Clients keep their endpoint, Knative-mode deployments stay on Istio, and no depl
 
     - Every Standard-mode deployment answers through the usual endpoint, with both URL shapes.
     - The Knative-mode deployments are unchanged.
+
+### LLM Gateway { #upgrade-llm-gateway }
+
+The [LLM Gateway][llm-gateway] is new in 5.3 and off by default.
+On top of Envoy Gateway, `global._hopsworks.envoyGateway.aiGateway.enabled` gives every project one OpenAI-compatible endpoint, `<inference endpoint>/v1/<project>/v1/...`, for its Standard-mode vLLM deployments.
+It brings the LLM Gateway controller, its six CRDs and a dedicated AI Gateway, a Redis and Envoy Gateway's rate-limit service for the [rate limits][llm-gateway-rate-limits], an access log on the AI Gateway's Envoy, and Grafana dashboards.
+[Tracing][llm-gateway-tracing] has a switch of its own, `aiGateway.tracing.enabled`, also off by default.
+
+An upgrade that leaves `aiGateway` alone changes nothing: the Istio Lua filter is the same, no object is added, and the backend finds no `envoy-ai-gateway-config` ConfigMap and does nothing.
+Rendering fails when `aiGateway.enabled` is on and `envoyGateway.enabled` is off.
+
+Before enabling, as listed under [How to enable it][llm-gateway-enable]:
+
+- Stop the started deployments named `v1`, or recreate them under another name.
+  Once the feature is on, such a deployment answers `404` through the Istio ingress and is not served by the LLM Gateway; it keeps answering through the Envoy Gateway.
+- Check cert-manager, a network plugin that enforces NetworkPolicies, and the backend's grants in the release namespace.
+- On an airgapped cluster, mirror the four images.
+
+Enable with one `helm upgrade`: no predictive pod, Knative pod or `kserve-ingress-gateway` pod restarts, and the AI Gateway's Envoy pods roll once when the first route attaches.
+Data Owners can then turn the LLM Gateway off per project and per deployment, both on by default.
+Disable with one upgrade with `aiGateway.enabled: false`, as described under [Turn it off][llm-gateway-disable], which also lists what a `helm rollback` leaves behind and how to remove it.
 
 ## Changes from 5.2.2 { #upgrade-changes-from-522 }
 
