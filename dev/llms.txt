@@ -334,6 +334,7 @@
 - [Python Build Performance](https://docs.hopsworks.ai/latest/setup_installation/admin/build_performance/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/build_performance/index.md))
 - [User Management](https://docs.hopsworks.ai/latest/setup_installation/admin/user/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/user/index.md))
 - [Project Management](https://docs.hopsworks.ai/latest/setup_installation/admin/project/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/project/index.md))
+- [Custom Project Roles](https://docs.hopsworks.ai/latest/setup_installation/admin/project_roles/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/project_roles/index.md))
 - [Configure Alerts](https://docs.hopsworks.ai/latest/setup_installation/admin/alert/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/alert/index.md))
 - [IAM Role Chaining](https://docs.hopsworks.ai/latest/setup_installation/admin/roleChaining/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/roleChaining/index.md))
 - [Configure Project Mapping](https://docs.hopsworks.ai/latest/setup_installation/admin/configure-project-mapping/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/configure-project-mapping/index.md))
@@ -348,6 +349,7 @@
 - [Model Serving Ingress Gateway](https://docs.hopsworks.ai/latest/setup_installation/admin/model_serving_gateway/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/model_serving_gateway/index.md))
 - [Kafka Quotas](https://docs.hopsworks.ai/latest/setup_installation/admin/kafka_quotas/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/kafka_quotas/index.md))
 - [OnlineFS Configuration](https://docs.hopsworks.ai/latest/setup_installation/admin/onlinefs/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/onlinefs/index.md))
+- [Security Response Headers](https://docs.hopsworks.ai/latest/setup_installation/admin/security_headers/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/security_headers/index.md))
 - [Uninstalling Hopsworks](https://docs.hopsworks.ai/latest/setup_installation/admin/uninstall/) ([md](https://docs.hopsworks.ai/latest/setup_installation/admin/uninstall/index.md))
 
 #### Upgrades
