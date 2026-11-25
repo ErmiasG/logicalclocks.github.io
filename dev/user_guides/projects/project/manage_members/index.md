@@ -106,7 +106,7 @@ To remove them from the project, click the delete button (:material-delete:) in 
 
 ### What happens to a removed member's files
 
-Each member has a private home directory in the project, `/Projects/<project>/Users/<username>`, holding their notebooks, their SSH key and their agent configuration.
+Each member has a [private home directory][user-home-directories] in the project, `/Projects/<project>/Users/<username>`, holding their notebooks, their SSH key and their agent configuration.
 
 When a member is removed, that directory and everything under it is transferred to another data owner. The files keep their contents and their paths; only the owner changes. The removed member loses access, as they do to the rest of the project.
 
@@ -127,6 +127,13 @@ Two cases where nothing is transferred, and one where the removal is refused:
 | The removal asks for the home directory to be deleted | The directory is deleted, so there is nothing to transfer |
 | The member being removed has no home directory | Nothing to transfer |
 | Removing the member would leave the project with no data owner | The removal is refused. Give another member the data owner role first |
+
+### What happens to the semantic projects a removed member owns
+
+The export jobs of a [semantic project][semantic-builds-owner] run as its owner, so removing the owner hands the semantic project over in the same request, to the data owner chosen to take the member's files when that data owner's role allows _Semantic layer: Run exports_, and otherwise to the data owner doing the removal.
+The remove dialog says who receives them.
+When neither can take them, the removal is refused with `MEMBER_OWNS_SEMANTIC_PROJECTS` and a message that names the semantic projects; transfer them first, see [When the owner leaves the project][semantic-builds-owner-removal].
+A member who owns semantic projects and leaves the project themselves names a data owner to take their files, or transfers the semantic projects first.
 
 ## Transfer ownership
 
@@ -172,10 +179,11 @@ for member in project.get_members():
 # Change a member's role
 project.get_members_api().update_role("alice@example.com", "Observer")
 
-# Remove a member. Their files go to the longest-serving data owner
+# Remove a member. Their files go to the longest-serving data owner,
+# and the semantic projects they own to you
 project.remove_member("alice@example.com")
 
-# Name the data owner that takes over their files
+# Name the data owner that takes over their files and semantic projects
 project.remove_member("alice@example.com", new_file_owner="carol@example.com")
 
 # Delete their files instead of handing them over
