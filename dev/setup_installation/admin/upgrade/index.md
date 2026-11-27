@@ -13,7 +13,7 @@ The commands assume Hopsworks is installed in the `hopsworks` namespace.
 | ------- | ---------- | ----------------- |
 | [5.0.x to 5.1.x][upgrade-50-to-51] | 1.3.x to 2.19.x | Kubernetes 1.34 or later before the upgrade, a first Helm 4 upgrade, and from 5.0.13 or earlier to 5.1.2 or later [the Trino query history][upgrade-trino-query-history]. |
 | [5.1.x to 5.2.x][upgrade-51-to-52] | 2.19.x to 3.8.0: upgrade to 5.2.1 or later | The index pass, Kafka moves to KRaft, KEDA, Kubernetes 1.37 only afterwards, Trino, from 5.2.2 [OnlineFS and the schema migrations][upgrade-changes-from-522], from 5.2.3 with your own image registry [the Envoy image of Python apps][upgrade-changes-from-523], and from 5.2.5 [Istio 1.30][upgrade-istio-130]. |
-| [5.2.x to 5.3.x][upgrade-52-to-53] | stays on 3.8.0 | [Additional prerequisites][upgrade-additional-prerequisites], [Strimzi 1.3][upgrade-strimzi-13] with central before its satellites, ICEBERG feature groups in Trino, the Filebeat registry, with your own pipelines, outputs or plugins [Logstash 9][upgrade-logstash-9], the memory of the OTLP sidecar of agent deployments, from 5.2.5 or later [Istio 1.31][upgrade-istio-131], [Envoy Gateway][upgrade-envoy-gateway] and [LLM Gateway][upgrade-llm-gateway] when turned on, with an external Kafka [the topics Hopsworks creates and deletes on it][upgrade-byok-topics], [notification topics and shared feature stores][upgrade-notification-topics], from 5.2.0 [the subset shares in Trino][upgrade-trino-subset-shares] and the OpenSearch security configuration, and from 5.2.0 or 5.2.1 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
+| [5.2.x to 5.3.x][upgrade-52-to-53] | stays on 3.8.0 | [Additional prerequisites][upgrade-additional-prerequisites], [Strimzi 1.3][upgrade-strimzi-13] with central before its satellites, ICEBERG feature groups in Trino, the Filebeat registry, with your own pipelines, outputs or plugins [Logstash 9][upgrade-logstash-9], the memory of the OTLP sidecar of agent deployments, from 5.2.5 or later [Istio 1.31][upgrade-istio-131], [Envoy Gateway][upgrade-envoy-gateway] and [LLM Gateway][upgrade-llm-gateway] when turned on, [Knative mode deprecated][upgrade-knative-mode-deprecated], with an external Kafka [the topics Hopsworks creates and deletes on it][upgrade-byok-topics], [notification topics and shared feature stores][upgrade-notification-topics], [the statistics settings][upgrade-statistics-defaults], from 5.2.0 [the subset shares in Trino][upgrade-trino-subset-shares] and the OpenSearch security configuration, and from 5.2.0 or 5.2.1 [OnlineFS and the schema migrations][upgrade-changes-from-522]. |
 
 ## Before every upgrade { #upgrade-before-every-upgrade }
 
@@ -424,8 +424,11 @@ On a cluster upgraded from a 6.0.0p4 database it ran 6 migrations in about a min
 
 ### Semantic layer { #upgrade-semantic-layer }
 
-5.3 adds the semantic layer, off by default.
-Before turning it on with `global._hopsworks.semanticLayer.enabled: true`:
+5.3 adds the semantic layer and installs it by default on a full platform with Trino and the nginx ingress class, see [Install or leave it out][semantic-admin-enable].
+A satellite and a release with Trino off get none of it by default.
+A release with another ingress class, such as the AWS Load Balancer Controller or the OpenShift router, gets the gateway, which serves nothing there, but not its Ingresses or the backend side; the chart's `values.aws.yaml` and `values.openshift.yaml` set `global._hopsworks.semanticLayer.enabled: false` to leave it out entirely.
+To serve the semantic layer behind such a controller, set `global._hopsworks.semanticLayer.enabled: true` and give its Ingresses that controller's settings, see [Ingress annotations][semantic-admin-ingress].
+Check the following before the upgrade, or leave the semantic layer out with `global._hopsworks.semanticLayer.enabled: false`:
 
 - **Room in `ts_1`.**
   The query history is the table `hopsworks.semantic_query` in RonDB's disk tablespace `ts_1`, which feature groups with disk columns share, and keeps each query for 30 days at about 13,000 bytes.
@@ -433,7 +436,16 @@ Before turning it on with `global._hopsworks.semanticLayer.enabled: true`:
 - **The 5.3 library in `python-feature-pipeline`.**
   Metric export jobs run in each project's `python-feature-pipeline` environment, and fail before they write with an older Hopsworks library there, see [Who runs an export][semantic-exports-owner].
 - **Memory for the gateway.**
-  Each of the two semantic gateway replicas takes 4 GiB, see [Memory][semantic-admin-memory].
+  The semantic gateway runs one replica of 4 GiB by default, see [Memory][semantic-admin-memory].
+- **Arrow Flight SQL from outside the cluster.**
+  The gateway's Flight SQL load balancer is off by default, so BI tools and other Flight SQL clients outside the cluster reach the gateway only after `semantic-gateway.externalLoadBalancer.enabled: true`, see [The Flight SQL load balancer][semantic-connect-admin-lb].
+  Until then, the connection details give the gateway's Service, which clients inside the cluster reach.
+  REST and GraphQL go through the Hopsworks ingress and need nothing.
+
+The upgrade runs a new pre-upgrade hook Job, `semantic-gateway-signing-init`.
+It creates the Secret `semantic-gateway-signing` with a random key when the Secret holds none, and leaves a key that exists alone.
+It touches only that Secret, and the gateway's pods start once it has run.
+With `semantic-gateway.signingKey.existingSecret` set it does not run, see [The signing key][semantic-connect-admin-signing-key].
 
 ### Kueue outside the Hopsworks namespace { #upgrade-kueue-external }
 
@@ -827,11 +839,90 @@ On a cluster still on Istio 1.29, the Istio install hook stops with an error bef
   To go back entirely, restore the backup on a new cluster, as described in [New Cluster Restore][new-cluster-restore].
   An in-place restore does not apply here, since it runs `helm upgrade` with the release of the backup, whose Istio install hook then runs over Istio 1.31.
 
+### Statistics settings { #upgrade-statistics-defaults }
+
+5.3 adds cluster settings for statistics jobs.
+Their defaults keep the behaviour of 5.2, so a cluster that changes none of them computes and keeps statistics as before.
+
+- **Feature monitoring covers up to 32 features.**
+  `feature_monitoring_max_num_features` rises from 15 to 32, so one configuration can monitor more features, and its runs take longer.
+  Set `hopsworks.variables.feature_monitoring_max_num_features: "15"` to keep the old limit.
+- **Statistics jobs can be sized on their own.**
+  `statistics_job_driver_memory`, `statistics_job_executor_memory`, `statistics_job_executor_cores` and `statistics_job_max_executors` size statistics jobs separately from other Spark jobs, existing ones included, and are empty by default.
+  Memory and cores only raise what a job already has, so resources given to a job in the Jobs UI are kept, while the maximum executors replaces the job's.
+  `statistics_job_bytes_per_executor` scales the executors of each run with the size of the table, up to the job's maximum, and is off at its default of 0.
+- **Old statistics can be pruned.**
+  `statistics_retention_rows_per_entity` keeps the newest statistics of each feature group and feature view up to that number, and keeps all of them at its default of 0.
+- **Incremental statistics are opt-in.**
+  With `statistics_incremental_enabled`, a commit's statistics are merged into the previous ones instead of profiling the whole table again, for feature groups that do not choose for themselves.
+  `statistics_incremental_allowed` turns incremental statistics off for the whole cluster, and `statistics_incremental_full_profile_every` sets how many commits are merged before a full profile runs again (50 by default).
+- **Change them in the values file.**
+  The chart writes its variables on every upgrade, so a change made only on the admin variables page is undone by the next upgrade.
+
+!!! warning "Feature monitoring during the rollout"
+
+    The Hopsworks workers are replaced one at a time, and statistics written in the new format are incomplete when a worker still on 5.2 reads them.
+    A feature monitoring run during the rollout can therefore fail, miss a shift or report one that is not there.
+    After the upgrade, run again every feature monitoring configuration that ran during the rollout.
+
 ### Storage initializer of model deployments { #upgrade-storage-initializer }
 
 The storage initializer, the init container that copies a downloading model deployment's files, now has limits of 2 cores and 2 GiB instead of 1 core and 1 GiB, because the copy was CPU-bound.
 A pod's limits count its largest init container, so a small predictor can now exceed a `limits.cpu` or `limits.memory` ResourceQuota or a LimitRange.
 Set `kserve.storageInitializer.resources` to keep the old limits.
+
+### Knative mode is deprecated { #upgrade-knative-mode-deprecated }
+
+!!! warning "Knative mode is deprecated"
+    Hopsworks 5.4 removes Knative and Istio.
+    Prepare while on 5.3, as described in [5.3.x to 5.4.x][upgrade-53-to-54].
+
+- **New deployments run in Standard mode.**
+  The UI no longer offers Knative mode, and creating a Knative-mode deployment from the Python SDK or the REST API fails with error `240082`.
+- **Existing Knative-mode deployments keep working** until their owners [convert them to Standard mode][knative-mode-deprecated].
+  `helm upgrade` prints how many of them are running.
+- **To allow new Knative-mode deployments until 5.4**, set `hopsworks.variables.kube_knative_mode_allowed: "true"` in your values file.
+  The chart writes the value on every upgrade, so a change in the admin UI lasts only until the next one.
+
+## 5.3.x to 5.4.x { #upgrade-53-to-54 }
+
+!!! info "5.4 is not released yet"
+    This section lists what to prepare on 5.3.
+
+5.4 removes Knative and Istio: model deployments run in Standard mode only, and Envoy Gateway replaces the Istio ingress gateway.
+The 5.4 upgrade does not start while Envoy Gateway is off or a Knative-mode deployment is running.
+
+1. **Enable Envoy Gateway**, as described in [Envoy Gateway][upgrade-envoy-gateway].
+2. **Convert the running Knative-mode deployments.**
+    List them, with `<namespace>` the Hopsworks namespace:
+
+    ```bash
+    kubectl get isvc -A -l serving.hops.works/id,hopsworks-deployment=<namespace> -o json | jq -r '.items[] | select((.status.deploymentMode // .metadata.annotations["serving.kserve.io/deploymentMode"] // "Knative") | test("^(Knative|Serverless)$")) | .metadata.namespace + "/" + .metadata.name'
+    ```
+
+    Their owners [convert each one][knative-mode-deprecated], which restarts it once.
+    Stopped Knative-mode deployments can wait: the 5.4 upgrade converts them.
+3. **Check the HTTPS certificate.**
+    With `kserve.knative.https.enabled`, the Secret named in `kserve.knative.https.credentialsName` must have the type `kubernetes.io/tls`, the only type Envoy Gateway accepts:
+
+    ```bash
+    kubectl get secret -n <namespace> <credentialsName> -o jsonpath='{.type}'
+    ```
+
+4. **Keep the gateway address.**
+    Node ports stay the same, but the upgrade releases the load balancer address of the Istio ingress gateway.
+    To keep it, reserve it before the upgrade:
+
+    - With a cloud load balancer, reserve it with your provider.
+    - With MetalLB, reserve it, for example in an `IPAddressPool` with `autoAssign: false`, and request it for the Envoy Gateway Service with MetalLB's `loadBalancerIPs` annotation in `kserve.envoyGateway.service.annotations`.
+
+    Otherwise, plan to move your DNS records to the new address.
+5. **Move what points at the Istio gateway.**
+    Anything outside the chart that names `istio-ingressgateway`, such as an OpenShift Route or a DNS record, moves to the Envoy Gateway Service `kserve-ingress-gateway`.
+    On AWS with unmanaged load balancers, the target groups in `global.unmanagedLoadBalancers.istio` move to the Envoy Gateway Service; the 5.4 upgrade notes give the steps.
+6. **Check your clients.**
+    Envoy Gateway drops request headers whose names contain an underscore, see [Headers with underscores][upgrade-envoy-gateway], and a request path must name the project exactly, see [Expose the Gateway directly][envoy-gateway].
+    Hopsworks and the Python clients cache the inference endpoint until they restart.
 
 ## Changes from 5.2.2 { #upgrade-changes-from-522 }
 
